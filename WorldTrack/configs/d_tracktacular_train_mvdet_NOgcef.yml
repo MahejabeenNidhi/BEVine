@@ -1,0 +1,62 @@
+data:
+  class_path: datasets.PedestrianDataModule
+  init_args:
+    data_dir: "/nas/drive6/mae/freestall_multicam/TrackTacular_MultiSeq"
+    batch_size: 2
+    num_workers: 4
+    accumulate_grad_batches: 8
+    sequences_file: "sequences_CityU_all.json"  # ✅ KEPT: Using all data
+    resolution: [200, 4, 120]  # Y, Z, X
+    bounds: [0, 120, 0, 200, 0, 20]  # xmin, xmax, ymin, ymax, zmin, zmax
+
+model:
+  # Resolution for TrackTacular
+  resolution: [200, 4, 120]
+  bounds: [0, 120, 0, 200, 0, 20]
+
+  # ✅ CRITICAL for cross-dataset testing later
+  num_cameras: null  # NOT 8! Enables variable camera support
+
+  # Model architecture
+  model_name: 'mvdet'
+  encoder_name: 'res18'
+  feat2d_dim: 128
+  num_classes: 1
+  z_sign: 1
+
+  # Training parameters (✅ MUST MATCH multi-dataset config)
+  learning_rate: 0.001
+  conf_threshold: 0.4
+  max_detections: 100
+  depth: [32, 250, 3250]
+
+  # ✅ NEW: GCEF parameters
+  use_gcef: false  # Enable Enhanced Global Context Fusion
+
+  # Temporal caching
+  use_temporal_cache: true
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  max_epochs: 60
+  accumulate_grad_batches: 8
+  gradient_clip_val: 0.5
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 5
+
+  callbacks:
+    # Learning rate monitoring
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: step
+
+    # Model checkpoint
+    - class_path: ModelCheckpoint
+      init_args:
+        monitor: val_center
+        mode: min
+        save_last: true
+        save_top_k: 1
+        filename: "tracktacular-best-{epoch:02d}-{val_center:.4f}"
+        auto_insert_metric_name: false

@@ -1,0 +1,57 @@
+data:
+  class_path: datasets.MultiDatasetPedestrianDataModule
+  init_args:
+    batch_size: 1  # Always 1 for testing
+    num_workers: 1
+    accumulate_grad_batches: 1
+    shuffle_datasets: false  # Don't shuffle during testing
+    dataset_configs:
+      # TrackTacular dataset (8 cameras, 200x120 grid)
+      - name: "tracktacular"
+        data_dir: "/nas/drive6/mae/freestall_multicam/TrackTacular_MultiSeq"
+        resolution: [200, 4, 120]  # Y, Z, X
+        bounds: [0, 120, 0, 200, 0, 20]
+        num_cameras: 8
+        depth: [32, 250, 3250]
+        sequences_file: "sequences_CityU_test.json"  # Test sequences only
+        z_sign: 1
+
+      # MMCows dataset (4 cameras, 117x192 grid)
+      - name: "mmcows"
+        data_dir: "/nas/drive6/mae/freestall_multicam/TrackTacular_mmCows_MultiSeq"
+        resolution: [117, 4, 192]  # Y, Z, X
+        bounds: [0, 192, 0, 117, 0, 20]
+        num_cameras: 4
+        depth: [32, 250, 3250]
+        sequences_file: "sequences_mmCows_test.json"  # Test sequences only
+        z_sign: 1
+
+model:
+  multi_dataset_mode: true
+  num_cameras: null
+  resolutions_list:
+    - [200, 4, 120]  # TrackTacular
+    - [117, 4, 192]  # MMCows
+  bounds_list:
+    - [0, 120, 0, 200, 0, 20]  # TrackTacular
+    - [0, 192, 0, 117, 0, 20]  # MMCows
+
+  # Model architecture
+  model_name: 'segnet'  # Must match your trained model
+  encoder_name: 'res18'
+  feat2d_dim: 128
+  num_classes: 1
+
+  # Inference parameters
+  conf_threshold: 0.4
+  max_detections: 100
+
+  # Temporal caching
+  use_temporal_cache: true
+
+  # Tracking parameters
+  use_advanced_tracking: true
+  tracking_motion_model: 'adaptive'
+  use_trajectory_matching: true
+  use_bev_iou: true
+  cattle_size: 60

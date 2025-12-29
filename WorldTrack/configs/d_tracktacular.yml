@@ -1,0 +1,15 @@
+data:
+  class_path: datasets.PedestrianDataModule
+  init_args:
+    data_dir: "/nas/drive6/mae/freestall_multicam/TrackTacular_300"
+
+model:
+  resolution: [200, 4, 120]  # Y, Z, X (matches grid: 200 rows, 120 cols)
+  bounds: [0, 120, 0, 200, 0, 20]  # xmin, xmax, ymin, ymax, zmin, zmax (in GRID units!)
+  depth: [32, 250, 3250]
+  num_cameras: 8
+  use_temporal_cache: True
+  z_sign: 1
+
+trainer:
+  max_epochs: 100

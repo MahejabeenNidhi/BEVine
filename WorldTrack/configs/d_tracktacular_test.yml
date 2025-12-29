@@ -1,0 +1,38 @@
+data:
+  class_path: datasets.PedestrianDataModule
+  init_args:
+    data_dir: "/nas/drive6/mae/freestall_multicam/TrackTacular_MultiSeq"
+    batch_size: 1  # Always 1 for testing
+    num_workers: 1
+    accumulate_grad_batches: 1
+    sequences_file: "sequences_CityU_test.json"  # Test sequences only
+    resolution: [200, 4, 120]  # Y, Z, X
+    bounds: [0, 120, 0, 200, 0, 20]
+
+model:
+  # Resolution for TrackTacular (same as training)
+  resolution: [200, 4, 120]
+  bounds: [0, 120, 0, 200, 0, 20]
+  
+  # Must match training config
+  num_cameras: null
+  model_name: 'mvdet'
+  encoder_name: 'res18'
+  feat2d_dim: 128
+  num_classes: 1
+  z_sign: 1
+  
+  # Inference parameters
+  conf_threshold: 0.4
+  max_detections: 100
+  depth: [32, 250, 3250]
+
+  # ✅ GCEF must match training config
+  use_gcef: true
+  
+  # Temporal caching
+  use_temporal_cache: true
+
+trainer:
+  accelerator: gpu
+  devices: 1

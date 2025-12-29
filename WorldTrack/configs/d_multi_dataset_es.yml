@@ -1,0 +1,95 @@
+data:
+  class_path: datasets.MultiDatasetPedestrianDataModule
+  init_args:
+    batch_size: 2
+    num_workers: 4
+    accumulate_grad_batches: 8
+    shuffle_datasets: true
+    dataset_configs:
+      # TrackTacular dataset (8 cameras, 200x120 grid)
+      - name: "tracktacular"
+        data_dir: "/nas/drive6/mae/freestall_multicam/TrackTacular_MultiSeq"
+        resolution: [200, 4, 120]  # Y, Z, X
+        bounds: [0, 120, 0, 200, 0, 20]  # xmin, xmax, ymin, ymax, zmin, zmax
+        num_cameras: 8
+        depth: [32, 250, 3250]
+        # ✅ RECOMMENDATION: Use "all" data for fair comparison
+        sequences_file: "sequences_CityU_reducedmixed.json"  # ✅ CHANGED from reducedmixed
+        z_sign: 1
+
+      # MMCows dataset (4 cameras, 117x192 grid)
+      - name: "mmcows"
+        data_dir: "/nas/drive6/mae/freestall_multicam/TrackTacular_mmCows_MultiSeq"
+        resolution: [117, 4, 192]  # Y, Z, X
+        bounds: [0, 192, 0, 117, 0, 20]
+        num_cameras: 4
+        depth: [32, 250, 3250]
+        # ✅ RECOMMENDATION: Use "all" data for fair comparison
+        sequences_file: "sequences_mmCows_reducedmixed.json"  # ✅ CHANGED from reducedmixed
+        z_sign: 1
+
+model:
+  multi_dataset_mode: true
+  num_cameras: null
+  resolutions_list:
+    - [200, 4, 120]  # TrackTacular
+    - [117, 4, 192]  # MMCows
+  bounds_list:
+    - [0, 120, 0, 200, 0, 20]  # TrackTacular
+    - [0, 192, 0, 117, 0, 20]  # MMCows
+
+  # Model architecture
+  model_name: 'mvdet'
+  encoder_name: 'res18'
+  feat2d_dim: 128
+  num_classes: 1
+
+  # Training parameters
+  learning_rate: 0.001
+  conf_threshold: 0.4
+  max_detections: 100
+
+  # Temporal caching with resolution awareness
+  use_temporal_cache: true
+
+  # Tracking parameters
+  use_advanced_tracking: true
+  tracking_motion_model: 'adaptive'
+  use_trajectory_matching: true
+  use_bev_iou: true
+  cattle_size: 60
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  max_epochs: 400  # ✅ CHANGED: High ceiling (was 100)
+  accumulate_grad_batches: 8
+  gradient_clip_val: 0.5
+  check_val_every_n_epoch: 1  # ✅ CHANGED: Every epoch (was 5)
+  log_every_n_steps: 5
+  
+  callbacks:
+    # Learning rate monitoring
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: step
+    
+    # ✅ ADDED: Early stopping
+    - class_path: EarlyStopping
+      init_args:
+        monitor: val_center
+        patience: 15
+        mode: min
+        min_delta: 0.001
+        verbose: true
+        strict: true
+    
+    # ✅ ADDED: Model checkpoint
+    - class_path: ModelCheckpoint
+      init_args:
+        monitor: val_center
+        mode: min
+        save_last: true
+        save_top_k: 1
+        filename: "multi-best-{epoch:02d}-{val_center:.4f}"
+        auto_insert_metric_name: false

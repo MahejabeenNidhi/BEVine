@@ -1,0 +1,52 @@
+data:
+  class_path: datasets.PedestrianDataModule
+  init_args:
+    data_dir: "/nas/drive6/mae/freestall_multicam/TrackTacular_mmCows_MultiSeq"
+    batch_size: 2
+    num_workers: 4
+    accumulate_grad_batches: 8
+    # to train an all the available data: sequences_mmCows_all.json
+    # to train on reduced data to be comparable to JerCCows: sequences_mmCows_reduced.json
+    sequences_file: "sequences_mmCows_reduced.json"
+    resolution: [117, 4, 192]  # Y, Z, X
+    bounds: [0, 192, 0, 117, 0, 20]
+
+model:
+  # Resolution for mmCows
+  resolution: [117, 4, 192]
+  bounds: [0, 192, 0, 117, 0, 20]
+  
+  # ✅ CRITICAL for cross-dataset testing later
+  num_cameras: null  # NOT 4! Enables variable camera support
+  
+  # Model architecture
+  model_name: 'mvdet'
+  encoder_name: 'res18'
+  feat2d_dim: 128
+  num_classes: 1
+  z_sign: 1
+  
+  # Training parameters
+  learning_rate: 0.001
+  conf_threshold: 0.4
+  max_detections: 100
+  depth: [32, 250, 3250]
+  
+  # Temporal caching
+  use_temporal_cache: true
+  
+  # Tracking
+  use_advanced_tracking: true
+  tracking_motion_model: 'adaptive'
+  use_trajectory_matching: true
+  use_bev_iou: true
+  cattle_size: 60
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  max_epochs: 100
+  accumulate_grad_batches: 8
+  gradient_clip_val: 0.5
+  check_val_every_n_epoch: 5
+  log_every_n_steps: 5

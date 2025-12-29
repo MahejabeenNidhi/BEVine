@@ -1,0 +1,38 @@
+data:
+  class_path: datasets.PedestrianDataModule
+  init_args:
+    data_dir: "/nas/drive6/mae/freestall_multicam/TrackTacular_mmCows_MultiSeq"
+    batch_size: 1  # Always 1 for testing
+    num_workers: 1
+    accumulate_grad_batches: 1
+    sequences_file: "sequences_mmCows_test_uniqueonly.json"  # Test sequences only
+    resolution: [117, 4, 192]
+    bounds: [0, 192, 0, 117, 0, 20]
+
+model:
+  # MMCows resolution (same as training)
+  resolution: [117, 4, 192]
+  bounds: [0, 192, 0, 117, 0, 20]
+  
+  # Must match training config
+  num_cameras: null
+  model_name: 'mvdet'
+  encoder_name: 'res18'
+  feat2d_dim: 128
+  num_classes: 1
+  z_sign: 1
+  
+  # Inference parameters
+  conf_threshold: 0.4
+  max_detections: 100
+  depth: [32, 250, 3250]
+
+  # ✅ GCEF parameters
+  use_gcef: false
+
+  # Temporal caching
+  use_temporal_cache: true
+
+trainer:
+  accelerator: gpu
+  devices: 1
