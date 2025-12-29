@@ -16,8 +16,10 @@ The JSON output files from using the visual_localization.py script that be furth
 ## How to train 
 
 ```
-python world_track.py fit   -c configs/t_fit.yml   -c configs/d_{dataset_config}f.yml   -c configs/m_{model_config}.yml
+python world_track.py fit   -c configs/t_fit.yml   -c configs/d_{dataset_config}.yml   -c configs/m_{model_config}.yml
+
 # Example: training mmcows with SegNet and GCEF module
+
 python world_track.py fit   -c configs/t_fit.yml   -c configs/d_mmcows_train_segnet_gcef.yml   -c configs/m_segnet.yml
 ```
 
@@ -25,7 +27,9 @@ python world_track.py fit   -c configs/t_fit.yml   -c configs/d_mmcows_train_seg
 
 ```
 python world_track.py test   -c configs/d_{dataset_test}.yml   --ckpt path/to/checkpoint/last.ckpt
+
 # Example
+
 python world_track.py test   -c configs/d_mmcows_test.yml   --ckpt path/to/checkpoint/last.ckpt
 ```
 Ensure that model_name and use_gcef in your test configuration file (e.g., d_mmcows_test.yml) match the values used during training.
