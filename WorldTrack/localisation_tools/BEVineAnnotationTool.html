@@ -1,0 +1,2654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manual Modifications of BEV Annotation Tool</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+
+        #app {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Sidebar */
+        #sidebar {
+            width: 320px;
+            background: #2d2d2d;
+            border-right: 2px solid #444;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .panel {
+            padding: 15px;
+            border-bottom: 1px solid #444;
+        }
+
+        .panel h3 {
+            margin-bottom: 10px;
+            color: #4CAF50;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .input-group {
+            margin-bottom: 10px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #aaa;
+        }
+
+        input[type="text"], input[type="number"], select {
+            width: 100%;
+            padding: 8px;
+            background: #1a1a1a;
+            border: 1px solid #555;
+            color: #e0e0e0;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        input[type="text"]:focus, input[type="number"]:focus, select:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        button {
+            padding: 10px 15px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #45a049;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        button.secondary {
+            background: #2196F3;
+        }
+
+        button.secondary:hover {
+            background: #0b7dda;
+        }
+
+        button.danger {
+            background: #f44336;
+        }
+
+        button.danger:hover {
+            background: #da190b;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+
+        /* Main Canvas Area */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            background: #000;
+        }
+
+        #canvas {
+            position: absolute;
+            cursor: crosshair;
+        }
+
+        /* Info Display */
+        #info-bar {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-size: 12px;
+            z-index: 10;
+        }
+
+        #info-bar div {
+            margin-bottom: 3px;
+        }
+
+        /* Coordinates Display */
+        #coords-display {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 11px;
+            font-family: 'Courier New', monospace;
+            z-index: 10;
+        }
+
+        /* Trajectory Mode Styles */
+        .trajectory-point {
+            cursor: move;
+        }
+
+        .trajectory-line {
+            pointer-events: none;
+        }
+
+        #timeline-canvas {
+            cursor: pointer;
+        }
+
+        #missing-frames-list div,
+        #issues-list div {
+            padding: 4px;
+            margin-bottom: 2px;
+            background: #2d2d2d;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #missing-frames-list div:hover,
+        #issues-list div:hover {
+            background: #3d3d3d;
+        }
+
+        #issues-list div {
+            color: #ff9800;
+        }
+
+        /* Trajectory controls visibility */
+        #trajectory-controls.active {
+            display: block;
+        }
+
+        /* Cow List */
+        #cow-list {
+            max-height: 300px;
+            overflow-y: auto;
+            background: #1a1a1a;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 5px;
+        }
+
+        .cow-item {
+            padding: 8px;
+            margin-bottom: 5px;
+            background: #2d2d2d;
+            border-radius: 3px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }
+
+        .cow-item:hover {
+            background: #3d3d3d;
+        }
+
+        .cow-item.selected {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .cow-item-info {
+            font-size: 12px;
+        }
+
+        .cow-item-id {
+            font-weight: bold;
+            color: #4CAF50;
+        }
+
+        .cow-item.selected .cow-item-id {
+            color: white;
+        }
+
+        .cow-item-delete {
+            background: #f44336;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        /* Status Messages */
+        #status-message {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(76, 175, 80, 0.9);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 5px;
+            z-index: 100;
+            display: none;
+            animation: slideIn 0.3s;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(-20px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        #status-message.error {
+            background: rgba(244, 67, 54, 0.9);
+        }
+
+        /* Loading Overlay */
+        #loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        #loading-overlay.active {
+            display: flex;
+        }
+
+        .loading-content {
+            background: #2d2d2d;
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .spinner {
+            border: 4px solid #444;
+            border-top: 4px solid #4CAF50;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #555;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #666;
+        }
+
+        /* File Upload */
+        .file-upload {
+            margin-bottom: 10px;
+        }
+
+        .file-upload input[type="file"] {
+            display: none;
+        }
+
+        .file-upload label {
+            display: inline-block;
+            padding: 10px 15px;
+            background: #2196F3;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.3s;
+        }
+
+        .file-upload label:hover {
+            background: #0b7dda;
+        }
+
+        /* Checkbox */
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+            margin-right: 8px;
+        }
+
+        .checkbox-group label {
+            margin: 0;
+            color: #e0e0e0;
+        }
+
+        /* Grid configuration */
+        .grid-info {
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-bottom: 10px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .grid-info div {
+            margin-bottom: 3px;
+        }
+
+        /* Batch edit info box */
+        .batch-info {
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-top: 10px;
+            color: #FFD700;
+            border: 1px solid #FFD700;
+        }
+
+        /* Input with button combo */
+        .input-button-combo {
+            display: flex;
+            gap: 5px;
+        }
+
+        .input-button-combo input {
+            flex: 1;
+        }
+
+        .input-button-combo button {
+            margin: 0;
+            padding: 8px 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Sidebar -->
+        <div id="sidebar">
+            <!-- Load Data Panel -->
+            <div class="panel">
+                <h3>📁 Load Data</h3>
+                <div class="file-upload">
+                    <label for="json-upload">
+                        📄 Load JSON Files
+                        <input type="file" id="json-upload" multiple accept=".json">
+                    </label>
+                </div>
+                <div id="load-status" style="margin-top: 10px; font-size: 12px; color: #aaa;"></div>
+            </div>
+
+            <!-- Grid Configuration -->
+            <div class="panel">
+                <h3>📐 Grid Configuration</h3>
+                <div class="grid-info">
+                    <div>X Range: <span id="grid-x-range">-879 to 1042 cm</span></div>
+                    <div>Y Range: <span id="grid-y-range">-646 to 533 cm</span></div>
+                    <div>Cell Size: <span id="grid-cell-size">10 cm</span></div>
+                    <div>Grid: <span id="grid-dimensions">192 × 118</span></div>
+                </div>
+                <div class="input-group">
+                    <label>X Min (cm)</label>
+                    <input type="number" id="x-min" value="-879">
+                </div>
+                <div class="input-group">
+                    <label>X Max (cm)</label>
+                    <input type="number" id="x-max" value="1042">
+                </div>
+                <div class="input-group">
+                    <label>Y Min (cm)</label>
+                    <input type="number" id="y-min" value="-646">
+                </div>
+                <div class="input-group">
+                    <label>Y Max (cm)</label>
+                    <input type="number" id="y-max" value="533">
+                </div>
+                <div class="input-group">
+                    <label>Cell Size (cm)</label>
+                    <input type="number" id="cell-size" value="10">
+                </div>
+                <button onclick="app.updateGridConfig()">Update Grid</button>
+            </div>
+
+            <!-- Frame Navigation -->
+            <div class="panel">
+                <h3>🎬 Frame Navigation</h3>
+                <div class="input-group">
+                    <label>Current Frame: <span id="current-frame-display">-</span></label>
+                    <input type="number" id="frame-jump" placeholder="Jump to frame...">
+                </div>
+                <div class="button-group">
+                    <button onclick="app.previousFrame()">◀ Previous</button>
+                    <button onclick="app.nextFrame()">Next ▶</button>
+                    <button class="secondary" onclick="app.jumpToFrame()">Jump</button>
+                </div>
+            </div>
+
+            <!-- Batch Position Edit -->
+            <div class="panel">
+                <h3>📝 Batch Position Edit</h3>
+                <div class="input-group">
+                    <label>Cow ID</label>
+                    <div class="input-button-combo">
+                        <input type="number" id="batch-cow-id" placeholder="Cow ID">
+                        <button class="secondary" onclick="app.useSelectedCow()">Use Selected</button>
+                    </div>
+                </div>
+
+                <div class="input-group">
+                    <label>Frame Range</label>
+                    <div style="display: flex; gap: 5px; margin-bottom: 5px;">
+                        <input type="number" id="batch-frame-start" placeholder="Start" style="width: 48%;">
+                        <input type="number" id="batch-frame-end" placeholder="End" style="width: 48%;">
+                    </div>
+                    <button class="secondary" onclick="app.useCurrentFrameRange()" style="width: 100%;">Use Current Frame</button>
+                </div>
+
+                <div class="input-group">
+                    <label>Position Input Method</label>
+                    <select id="batch-position-method">
+                        <option value="world">World Coordinates (cm)</option>
+                        <option value="grid">Grid Coordinates</option>
+                        <option value="positionID">Position ID</option>
+                        <option value="current">Use Current Position</option>
+                    </select>
+                </div>
+
+                <div id="batch-world-inputs">
+                    <div class="input-group">
+                        <label>X Position (cm)</label>
+                        <input type="number" id="batch-world-x" placeholder="X coordinate">
+                    </div>
+                    <div class="input-group">
+                        <label>Y Position (cm)</label>
+                        <input type="number" id="batch-world-y" placeholder="Y coordinate">
+                    </div>
+                </div>
+
+                <div id="batch-grid-inputs" style="display: none;">
+                    <div class="input-group">
+                        <label>Grid X</label>
+                        <input type="number" id="batch-grid-x" placeholder="Grid X">
+                    </div>
+                    <div class="input-group">
+                        <label>Grid Y</label>
+                        <input type="number" id="batch-grid-y" placeholder="Grid Y">
+                    </div>
+                </div>
+
+                <div id="batch-posid-input" style="display: none;">
+                    <div class="input-group">
+                        <label>Position ID</label>
+                        <input type="number" id="batch-position-id" placeholder="Position ID">
+                    </div>
+                </div>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="batch-add-missing" checked>
+                    <label for="batch-add-missing">Add cow to frames where missing</label>
+                </div>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="batch-update-existing" checked>
+                    <label for="batch-update-existing">Update existing positions</label>
+                </div>
+
+                <div class="button-group">
+                    <button onclick="app.applyBatchPosition()">✓ Apply to Frames</button>
+                    <button class="secondary" onclick="app.previewBatchPosition()">👁️ Preview</button>
+                </div>
+
+                <div id="batch-preview-info" style="display: none;" class="batch-info">
+                    <!-- Preview information will be shown here -->
+                </div>
+            </div>
+
+            <!-- Cow Management -->
+            <div class="panel">
+                <h3>🐄 Cow Management</h3>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="add-mode" onchange="app.toggleAddMode()">
+                    <label for="add-mode">Add Cow Mode (Click on canvas)</label>
+                </div>
+                <div class="input-group">
+                    <label>New Cow ID</label>
+                    <input type="number" id="new-cow-id" placeholder="Auto-assign">
+                </div>
+                <button onclick="app.deleteSelectedCow()" class="danger">🗑️ Delete Selected</button>
+            </div>
+
+            <!-- Trajectory Mode Panel -->
+            <div class="panel">
+                <h3>📍 Trajectory Mode</h3>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="trajectory-mode" onchange="app.toggleTrajectoryMode()">
+                    <label for="trajectory-mode">Enable Trajectory Mode</label>
+                </div>
+
+                <div id="trajectory-controls" style="display: none;">
+                    <div class="input-group">
+                        <label>Track Cow ID</label>
+                        <input type="number" id="track-cow-id" placeholder="Enter cow ID">
+                    </div>
+
+                    <div class="input-group">
+                        <label>Frame Range</label>
+                        <div style="display: flex; gap: 5px; align-items: center;">
+                            <input type="number" id="track-frame-start" placeholder="Start" style="width: 48%;">
+                            <span style="color: #aaa;">to</span>
+                            <input type="number" id="track-frame-end" placeholder="End" style="width: 48%;">
+                        </div>
+                    </div>
+
+                    <button onclick="app.loadTrajectory()" class="secondary">📊 Load Trajectory</button>
+                    <button onclick="app.clearTrajectory()">Clear</button>
+
+                    <div id="trajectory-info" style="display: none; margin-top: 10px;">
+                        <div class="grid-info">
+                            <div><strong>Statistics:</strong></div>
+                            <div>Present: <span id="traj-present">0</span>/<span id="traj-total">0</span> frames</div>
+                            <div>Missing: <span id="traj-missing">0</span> frames</div>
+                            <div>Avg Speed: <span id="traj-speed">0</span> cm/frame</div>
+                            <div>Max Jump: <span id="traj-max-jump">0</span> cm</div>
+                        </div>
+
+                        <div class="checkbox-group" style="margin-top: 10px;">
+                            <input type="checkbox" id="show-trajectory-line" onchange="app.render()" checked>
+                            <label for="show-trajectory-line">Show Path Line</label>
+                        </div>
+
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="show-trajectory-markers" onchange="app.render()" checked>
+                            <label for="show-trajectory-markers">Show Frame Markers</label>
+                        </div>
+
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="show-trajectory-labels" onchange="app.render()">
+                            <label for="show-trajectory-labels">Show Frame Numbers</label>
+                        </div>
+
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="highlight-gaps" onchange="app.render()" checked>
+                            <label for="highlight-gaps">Highlight Gaps</label>
+                        </div>
+
+                        <!-- Timeline -->
+                        <div style="margin-top: 15px;">
+                            <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #aaa;">Timeline</label>
+                            <canvas id="timeline-canvas" style="width: 100%; height: 30px; background: #1a1a1a; border: 1px solid #555; border-radius: 4px; cursor: pointer;"></canvas>
+                        </div>
+
+                        <!-- Missing Frames List -->
+                        <div id="missing-frames-container" style="display: none; margin-top: 10px;">
+                            <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #aaa;">Missing Frames</label>
+                            <div id="missing-frames-list" style="max-height: 100px; overflow-y: auto; background: #1a1a1a; border: 1px solid #555; border-radius: 4px; padding: 5px; font-size: 11px; font-family: 'Courier New', monospace;">
+                            </div>
+                        </div>
+
+                        <!-- Issues List -->
+                        <div id="issues-container" style="display: none; margin-top: 10px;">
+                            <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #f44336;">⚠️ Issues Detected</label>
+                            <div id="issues-list" style="max-height: 100px; overflow-y: auto; background: #1a1a1a; border: 1px solid #f44336; border-radius: 4px; padding: 5px; font-size: 11px;">
+                            </div>
+                        </div>
+
+                        <!-- Trajectory Tools -->
+                        <div style="margin-top: 15px;">
+                            <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #aaa;">Trajectory Tools</label>
+                            <div class="button-group">
+                                <button onclick="app.fillTrajectoryGaps()" class="secondary">Fill Gaps</button>
+                                <button onclick="app.smoothTrajectory()" class="secondary">Smooth Path</button>
+                            </div>
+                            <div class="button-group">
+                                <button onclick="app.detectTrajectoryIssues()">Detect Issues</button>
+                                <button onclick="app.jumpToNextGap()" style="background: #FF9800;">Next Gap →</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Cow List -->
+            <div class="panel">
+                <h3>📋 Cows in Frame (<span id="cow-count">0</span>)</h3>
+                <div id="cow-list"></div>
+            </div>
+
+            <!-- View Options -->
+            <div class="panel">
+                <h3>👁️ View Options</h3>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="show-grid" onchange="app.render()" checked>
+                    <label for="show-grid">Show Grid</label>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="show-axes" onchange="app.render()" checked>
+                    <label for="show-axes">Show Axes</label>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="show-labels" onchange="app.render()" checked>
+                    <label for="show-labels">Show Labels</label>
+                </div>
+                <div class="input-group">
+                    <label>Zoom: <span id="zoom-display">100%</span></label>
+                    <input type="range" id="zoom-slider" min="50" max="300" value="100"
+                           oninput="app.setZoom(this.value)">
+                </div>
+                <button onclick="app.resetView()">Reset View</button>
+            </div>
+
+            <!-- Save/Export -->
+            <div class="panel">
+                <h3>💾 Save & Export</h3>
+                <div class="button-group">
+                    <button onclick="app.saveCurrentFrame()">💾 Save Frame</button>
+                    <button class="secondary" onclick="app.exportCurrentFrame()">📥 Export JSON</button>
+                    <button class="secondary" onclick="app.exportAllFrames()">📦 Export All (ZIP)</button>
+                </div>
+                <div style="margin-top: 10px; font-size: 11px; color: #aaa;">
+                    Auto-save: <span id="autosave-status">Enabled</span>
+                </div>
+            </div>
+
+            <!-- Undo/Redo -->
+            <div class="panel">
+                <h3>↩️ History</h3>
+                <div class="button-group">
+                    <button onclick="app.undo()" id="undo-btn" disabled>↶ Undo</button>
+                    <button onclick="app.redo()" id="redo-btn" disabled>↷ Redo</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Canvas Area -->
+        <div id="canvas-container">
+            <canvas id="canvas"></canvas>
+
+            <!-- Info Bar -->
+            <div id="info-bar">
+                <div><strong>Frame:</strong> <span id="frame-name">-</span></div>
+                <div><strong>Cows:</strong> <span id="info-cow-count">0</span></div>
+                <div><strong>Selected:</strong> <span id="selected-cow">None</span></div>
+            </div>
+
+            <!-- Coordinates Display -->
+            <div id="coords-display">
+                Mouse: (<span id="mouse-x">-</span>, <span id="mouse-y">-</span>) cm<br>
+                Grid: (<span id="grid-x">-</span>, <span id="grid-y">-</span>)
+            </div>
+
+            <!-- Status Message -->
+            <div id="status-message"></div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <div id="loading-text">Processing...</div>
+        </div>
+    </div>
+
+    <script>
+    class CowAnnotationApp {
+        constructor() {
+            // Grid configuration
+            this.config = {
+                xMin: -879,
+                xMax: 1042,
+                yMin: -646,
+                yMax: 533,
+                cellSize: 10
+            };
+
+            // Calculated grid dimensions
+            this.updateGridDimensions();
+
+            // Data storage
+            this.frames = []; // Array of {filename, jsonData}
+            this.currentFrameIndex = -1;
+
+            // Canvas and rendering
+            this.canvas = document.getElementById('canvas');
+            this.ctx = this.canvas.getContext('2d');
+            this.offset = { x: 0, y: 0 };
+            this.zoom = 1.0;
+            this.isDragging = false;
+            this.isPanning = false;
+            this.draggedCow = null;
+            this.selectedCowId = null;
+
+            // Padding for axes and labels
+            this.padding = { left: 60, right: 40, top: 40, bottom: 60 };
+
+            // History for undo/redo
+            this.history = [];
+            this.historyIndex = -1;
+
+            // Trajectory mode
+            this.trajectoryMode = false;
+            this.trajectoryData = null;
+            this.trajectoryIssues = [];
+            this.currentGapIndex = 0;
+            this.isDraggingTrajectoryPoint = false;
+
+            // Add cow mode
+            this.addMode = false;
+
+            // Setup
+            this.setupCanvas();
+            this.setupEventListeners();
+            this.loadFromLocalStorage();
+            this.render();
+        }
+
+        updateGridDimensions() {
+            this.gridWidth = Math.floor((this.config.xMax - this.config.xMin) / this.config.cellSize);
+            this.gridHeight = Math.floor((this.config.yMax - this.config.yMin) / this.config.cellSize);
+
+            // Update display
+            document.getElementById('grid-dimensions').textContent = `${this.gridWidth} × ${this.gridHeight}`;
+            document.getElementById('grid-x-range').textContent = `${this.config.xMin} to ${this.config.xMax} cm`;
+            document.getElementById('grid-y-range').textContent = `${this.config.yMin} to ${this.config.yMax} cm`;
+            document.getElementById('grid-cell-size').textContent = `${this.config.cellSize} cm`;
+        }
+
+        updateGridConfig() {
+            this.config.xMin = parseFloat(document.getElementById('x-min').value);
+            this.config.xMax = parseFloat(document.getElementById('x-max').value);
+            this.config.yMin = parseFloat(document.getElementById('y-min').value);
+            this.config.yMax = parseFloat(document.getElementById('y-max').value);
+            this.config.cellSize = parseFloat(document.getElementById('cell-size').value);
+
+            this.updateGridDimensions();
+            this.render();
+            this.showMessage('Grid configuration updated');
+        }
+
+        setupCanvas() {
+            const container = document.getElementById('canvas-container');
+            this.canvas.width = container.clientWidth;
+            this.canvas.height = container.clientHeight;
+
+            window.addEventListener('resize', () => {
+                this.canvas.width = container.clientWidth;
+                this.canvas.height = container.clientHeight;
+                this.render();
+            });
+        }
+
+        setupEventListeners() {
+            // File uploads
+            document.getElementById('json-upload').addEventListener('change', (e) => this.loadJSONFiles(e));
+
+            // Canvas mouse events
+            this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
+            this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
+            this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
+            this.canvas.addEventListener('wheel', (e) => this.onWheel(e));
+
+            // Keyboard shortcuts
+            window.addEventListener('keydown', (e) => this.onKeyDown(e));
+
+            // Batch position method change
+            document.getElementById('batch-position-method').addEventListener('change', () => {
+                this.updateBatchInputVisibility();
+            });
+        }
+
+        // ============== FILE LOADING ==============
+
+        async loadJSONFiles(event) {
+            const files = Array.from(event.target.files);
+            const jsonFiles = files.filter(f => f.name.endsWith('.json'));
+
+            this.showLoading(`Loading ${jsonFiles.length} files...`);
+
+            for (const file of jsonFiles) {
+                const text = await file.text();
+                const data = JSON.parse(text);
+                const filename = file.name.replace('.json', '');
+
+                const existingIndex = this.frames.findIndex(f => f.filename === filename);
+                if (existingIndex >= 0) {
+                    this.frames[existingIndex].jsonData = data;
+                } else {
+                    this.frames.push({ filename, jsonData: data });
+                }
+            }
+
+            this.sortFrames();
+            this.updateLoadStatus();
+
+            if (this.currentFrameIndex < 0 && this.frames.length > 0) {
+                this.currentFrameIndex = 0;
+                this.render();
+            }
+
+            this.hideLoading();
+            this.showMessage(`Loaded ${jsonFiles.length} JSON files`);
+        }
+
+        sortFrames() {
+            this.frames.sort((a, b) => a.filename.localeCompare(b.filename));
+        }
+
+        updateLoadStatus() {
+            const total = this.frames.length;
+            const withJSON = this.frames.filter(f => f.jsonData).length;
+
+            document.getElementById('load-status').innerHTML = `
+                Total frames: ${total}<br>
+                With JSON: ${withJSON}
+            `;
+        }
+
+        // ============== COORDINATE CONVERSION ==============
+
+        worldToGrid(worldX, worldY) {
+            const gridX = Math.floor((worldX - this.config.xMin) / this.config.cellSize);
+            const gridY = Math.floor((worldY - this.config.yMin) / this.config.cellSize);
+            return { gridX, gridY };
+        }
+
+        gridToWorld(gridX, gridY) {
+            const worldX = gridX * this.config.cellSize + this.config.xMin + this.config.cellSize / 2;
+            const worldY = gridY * this.config.cellSize + this.config.yMin + this.config.cellSize / 2;
+            return { worldX, worldY };
+        }
+
+        positionIDToGrid(positionID) {
+            const gridX = Math.floor(positionID / this.gridHeight);
+            const gridY = positionID % this.gridHeight;
+            return { gridX, gridY };
+        }
+
+        gridToPositionID(gridX, gridY) {
+            return gridX * this.gridHeight + gridY;
+        }
+
+        positionIDToWorld(positionID) {
+            const { gridX, gridY } = this.positionIDToGrid(positionID);
+            return this.gridToWorld(gridX, gridY);
+        }
+
+        worldToPositionID(worldX, worldY) {
+            const { gridX, gridY } = this.worldToGrid(worldX, worldY);
+            return this.gridToPositionID(gridX, gridY);
+        }
+
+        canvasToWorld(canvasX, canvasY) {
+            const drawWidth = this.canvas.width - this.padding.left - this.padding.right;
+            const drawHeight = this.canvas.height - this.padding.top - this.padding.bottom;
+
+            const worldWidth = this.config.xMax - this.config.xMin;
+            const worldHeight = this.config.yMax - this.config.yMin;
+
+            const scale = Math.min(drawWidth / worldWidth, drawHeight / worldHeight) * this.zoom;
+
+            const centerX = this.padding.left + drawWidth / 2;
+            const centerY = this.padding.top + drawHeight / 2;
+
+            const worldX = (canvasX - centerX - this.offset.x) / scale + (this.config.xMin + this.config.xMax) / 2;
+            const worldY = (canvasY - centerY - this.offset.y) / scale + (this.config.yMin + this.config.yMax) / 2;
+
+            return { worldX, worldY };
+        }
+
+        worldToCanvas(worldX, worldY) {
+            const drawWidth = this.canvas.width - this.padding.left - this.padding.right;
+            const drawHeight = this.canvas.height - this.padding.top - this.padding.bottom;
+
+            const worldWidth = this.config.xMax - this.config.xMin;
+            const worldHeight = this.config.yMax - this.config.yMin;
+
+            const scale = Math.min(drawWidth / worldWidth, drawHeight / worldHeight) * this.zoom;
+
+            const centerX = this.padding.left + drawWidth / 2;
+            const centerY = this.padding.top + drawHeight / 2;
+
+            const canvasX = centerX + (worldX - (this.config.xMin + this.config.xMax) / 2) * scale + this.offset.x;
+            const canvasY = centerY + (worldY - (this.config.yMin + this.config.yMax) / 2) * scale + this.offset.y;
+
+            return { canvasX, canvasY };
+        }
+
+        // ============== RENDERING ==============
+
+        render() {
+            const frame = this.getCurrentFrame();
+
+            this.ctx.fillStyle = '#000';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+            if (document.getElementById('show-axes').checked) {
+                this.drawAxes();
+            }
+
+            if (document.getElementById('show-grid').checked) {
+                this.drawGrid();
+            }
+
+            if (this.trajectoryMode && this.trajectoryData) {
+                this.drawTrajectory();
+            }
+
+            if (frame && frame.jsonData) {
+                this.drawCowMarkers(frame.jsonData);
+            }
+
+            this.updateUI();
+        }
+
+        drawAxes() {
+            this.ctx.strokeStyle = '#888';
+            this.ctx.lineWidth = 2;
+            this.ctx.fillStyle = '#aaa';
+            this.ctx.font = '12px Arial';
+
+            const xAxisY = this.canvas.height - this.padding.bottom;
+            this.ctx.beginPath();
+            this.ctx.moveTo(this.padding.left, xAxisY);
+            this.ctx.lineTo(this.canvas.width - this.padding.right, xAxisY);
+            this.ctx.stroke();
+
+            const yAxisX = this.padding.left;
+            this.ctx.beginPath();
+            this.ctx.moveTo(yAxisX, this.padding.top);
+            this.ctx.lineTo(yAxisX, this.canvas.height - this.padding.bottom);
+            this.ctx.stroke();
+
+            const xStep = 200;
+            for (let x = Math.ceil(this.config.xMin / xStep) * xStep; x <= this.config.xMax; x += xStep) {
+                const { canvasX } = this.worldToCanvas(x, this.config.yMin);
+
+                this.ctx.beginPath();
+                this.ctx.moveTo(canvasX, xAxisY);
+                this.ctx.lineTo(canvasX, xAxisY + 5);
+                this.ctx.stroke();
+
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'top';
+                this.ctx.fillText(x.toString(), canvasX, xAxisY + 8);
+            }
+
+            const yStep = 200;
+            for (let y = Math.ceil(this.config.yMin / yStep) * yStep; y <= this.config.yMax; y += yStep) {
+                const { canvasY } = this.worldToCanvas(this.config.xMin, y);
+
+                this.ctx.beginPath();
+                this.ctx.moveTo(yAxisX - 5, canvasY);
+                this.ctx.lineTo(yAxisX, canvasY);
+                this.ctx.stroke();
+
+                this.ctx.textAlign = 'right';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(y.toString(), yAxisX - 8, canvasY);
+            }
+
+            this.ctx.fillStyle = '#fff';
+            this.ctx.font = 'bold 14px Arial';
+
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText('X (cm)', this.canvas.width / 2, this.canvas.height - 15);
+
+            this.ctx.save();
+            this.ctx.translate(15, this.canvas.height / 2);
+            this.ctx.rotate(-Math.PI / 2);
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText('Y (cm)', 0, 0);
+            this.ctx.restore();
+        }
+
+        drawGrid() {
+            this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+            this.ctx.lineWidth = 1;
+
+            const gridStep = 100;
+            for (let x = Math.ceil(this.config.xMin / gridStep) * gridStep; x <= this.config.xMax; x += gridStep) {
+                const { canvasX: x1, canvasY: y1 } = this.worldToCanvas(x, this.config.yMin);
+                const { canvasX: x2, canvasY: y2 } = this.worldToCanvas(x, this.config.yMax);
+
+                this.ctx.beginPath();
+                this.ctx.moveTo(x1, y1);
+                this.ctx.lineTo(x2, y2);
+                this.ctx.stroke();
+            }
+
+            for (let y = Math.ceil(this.config.yMin / gridStep) * gridStep; y <= this.config.yMax; y += gridStep) {
+                const { canvasX: x1, canvasY: y1 } = this.worldToCanvas(this.config.xMin, y);
+                const { canvasX: x2, canvasY: y2 } = this.worldToCanvas(this.config.xMax, y);
+
+                this.ctx.beginPath();
+                this.ctx.moveTo(x1, y1);
+                this.ctx.lineTo(x2, y2);
+                this.ctx.stroke();
+            }
+        }
+
+        drawTrajectory() {
+            if (!this.trajectoryData) return;
+
+            const { positions, missingFrames } = this.trajectoryData;
+            const showLine = document.getElementById('show-trajectory-line').checked;
+            const showMarkers = document.getElementById('show-trajectory-markers').checked;
+            const showLabels = document.getElementById('show-trajectory-labels').checked;
+            const highlightGaps = document.getElementById('highlight-gaps').checked;
+
+            if (showLine && positions.length > 1) {
+                this.ctx.beginPath();
+
+                for (let i = 0; i < positions.length; i++) {
+                    const pos = positions[i];
+                    const { canvasX, canvasY } = this.worldToCanvas(pos.worldX, pos.worldY);
+
+                    if (i === 0) {
+                        this.ctx.moveTo(canvasX, canvasY);
+                    } else {
+                        this.ctx.lineTo(canvasX, canvasY);
+                    }
+                }
+
+                this.ctx.strokeStyle = '#00BCD4';
+                this.ctx.lineWidth = 2;
+                this.ctx.stroke();
+            }
+
+            if (showMarkers) {
+                for (let i = 0; i < positions.length; i++) {
+                    const pos = positions[i];
+                    const { canvasX, canvasY } = this.worldToCanvas(pos.worldX, pos.worldY);
+                    const isCurrentFrame = pos.frameIndex === this.currentFrameIndex;
+
+                    this.ctx.beginPath();
+                    this.ctx.arc(canvasX, canvasY, isCurrentFrame ? 8 : 5, 0, Math.PI * 2);
+                    this.ctx.fillStyle = isCurrentFrame ? '#FFD700' : 'rgba(0, 188, 212, 0.7)';
+                    this.ctx.fill();
+                    this.ctx.strokeStyle = isCurrentFrame ? '#FFD700' : '#00BCD4';
+                    this.ctx.lineWidth = isCurrentFrame ? 3 : 2;
+                    this.ctx.stroke();
+
+                    if (showLabels) {
+                        this.ctx.fillStyle = '#FFF';
+                        this.ctx.font = '10px Arial';
+                        this.ctx.textAlign = 'center';
+                        this.ctx.textBaseline = 'bottom';
+                        this.ctx.fillText(pos.frameIndex.toString(), canvasX, canvasY - 12);
+                    }
+                }
+            }
+
+            if (highlightGaps && missingFrames.length > 0) {
+                for (const missing of missingFrames) {
+                    const prevPos = positions.findLast(p => p.frameIndex < missing.frameIndex);
+                    const nextPos = positions.find(p => p.frameIndex > missing.frameIndex);
+
+                    if (prevPos && nextPos) {
+                        const frameDiff = nextPos.frameIndex - prevPos.frameIndex;
+                        const progress = (missing.frameIndex - prevPos.frameIndex) / frameDiff;
+
+                        const estX = prevPos.worldX + (nextPos.worldX - prevPos.worldX) * progress;
+                        const estY = prevPos.worldY + (nextPos.worldY - prevPos.worldY) * progress;
+
+                        const { canvasX, canvasY } = this.worldToCanvas(estX, estY);
+
+                        this.ctx.strokeStyle = '#f44336';
+                        this.ctx.lineWidth = 2;
+                        const size = 8;
+
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(canvasX - size, canvasY - size);
+                        this.ctx.lineTo(canvasX + size, canvasY + size);
+                        this.ctx.moveTo(canvasX + size, canvasY - size);
+                        this.ctx.lineTo(canvasX - size, canvasY + size);
+                        this.ctx.stroke();
+
+                        if (missing.frameIndex === this.currentFrameIndex) {
+                            this.ctx.beginPath();
+                            this.ctx.arc(canvasX, canvasY, 12, 0, Math.PI * 2);
+                            this.ctx.strokeStyle = '#FFD700';
+                            this.ctx.lineWidth = 3;
+                            this.ctx.stroke();
+                        }
+                    }
+                }
+            }
+        }
+
+        drawCowMarkers(cows) {
+            const showLabels = document.getElementById('show-labels').checked;
+
+            for (const cow of cows) {
+                const { worldX, worldY } = this.positionIDToWorld(cow.positionID);
+                const { canvasX, canvasY } = this.worldToCanvas(worldX, worldY);
+
+                const isTrackedCow = this.trajectoryMode && this.trajectoryData && cow.personID === this.trajectoryData.cowId;
+                const isSelected = cow.personID === this.selectedCowId;
+
+                if (this.trajectoryMode && isTrackedCow) {
+                    continue;
+                }
+
+                const radius = isSelected ? 12 : 8;
+
+                this.ctx.beginPath();
+                this.ctx.arc(canvasX, canvasY, radius, 0, Math.PI * 2);
+                this.ctx.fillStyle = isSelected ? 'rgba(255, 215, 0, 0.8)' : 'rgba(76, 175, 80, 0.7)';
+                this.ctx.fill();
+                this.ctx.strokeStyle = isSelected ? '#FFD700' : '#4CAF50';
+                this.ctx.lineWidth = isSelected ? 3 : 2;
+                this.ctx.stroke();
+
+                if (showLabels) {
+                    this.ctx.fillStyle = '#FFF';
+                    this.ctx.font = 'bold 14px Arial';
+                    this.ctx.textAlign = 'center';
+                    this.ctx.textBaseline = 'middle';
+                    this.ctx.fillText(cow.personID.toString(), canvasX, canvasY);
+                }
+            }
+        }
+
+        // ============== MOUSE INTERACTION ==============
+
+        onMouseDown(e) {
+            const rect = this.canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            if (this.trajectoryMode && this.trajectoryData) {
+                const currentPos = this.trajectoryData.positions.find(p => p.frameIndex === this.currentFrameIndex);
+                if (currentPos) {
+                    const { canvasX, canvasY } = this.worldToCanvas(currentPos.worldX, currentPos.worldY);
+                    const dist = Math.sqrt(
+                        Math.pow(mouseX - canvasX, 2) +
+                        Math.pow(mouseY - canvasY, 2)
+                    );
+
+                    if (dist < 15) {
+                        this.isDraggingTrajectoryPoint = true;
+                        this.selectedCowId = this.trajectoryData.cowId;
+                        this.updateCowList();
+                        this.render();
+                        this.saveHistory();
+                        return;
+                    }
+                }
+
+                const isMissingFrame = this.trajectoryData.missingFrames.some(
+                    mf => mf.frameIndex === this.currentFrameIndex
+                );
+
+                if (isMissingFrame) {
+                    this.addTrackedCowAtPosition(mouseX, mouseY);
+                    return;
+                }
+            }
+
+            const frame = this.getCurrentFrame();
+            if (frame && frame.jsonData) {
+                for (const cow of frame.jsonData) {
+                    const { worldX, worldY } = this.positionIDToWorld(cow.positionID);
+                    const { canvasX, canvasY } = this.worldToCanvas(worldX, worldY);
+
+                    const dist = Math.sqrt(
+                        Math.pow(mouseX - canvasX, 2) +
+                        Math.pow(mouseY - canvasY, 2)
+                    );
+
+                    if (dist < 15) {
+                        if (this.addMode) {
+                            return;
+                        }
+
+                        this.isDragging = true;
+                        this.draggedCow = cow;
+                        this.selectedCowId = cow.personID;
+                        this.updateCowList();
+                        this.render();
+                        this.saveHistory();
+                        return;
+                    }
+                }
+            }
+
+            if (this.addMode && frame) {
+                this.addCowAtPosition(mouseX, mouseY);
+                return;
+            }
+
+            if (e.button === 0) {
+                this.isPanning = true;
+                this.lastMouseX = mouseX;
+                this.lastMouseY = mouseY;
+            }
+        }
+
+        onMouseMove(e) {
+            const rect = this.canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            const { worldX, worldY } = this.canvasToWorld(mouseX, mouseY);
+            const { gridX, gridY } = this.worldToGrid(worldX, worldY);
+
+            document.getElementById('mouse-x').textContent = worldX.toFixed(0);
+            document.getElementById('mouse-y').textContent = worldY.toFixed(0);
+            document.getElementById('grid-x').textContent = gridX;
+            document.getElementById('grid-y').textContent = gridY;
+
+            if (this.trajectoryMode && this.trajectoryData) {
+                const currentPos = this.trajectoryData.positions.find(p => p.frameIndex === this.currentFrameIndex);
+                if (currentPos) {
+                    const { canvasX, canvasY } = this.worldToCanvas(currentPos.worldX, currentPos.worldY);
+                    const dist = Math.sqrt(
+                        Math.pow(mouseX - canvasX, 2) +
+                        Math.pow(mouseY - canvasY, 2)
+                    );
+
+                    if (dist < 15) {
+                        this.canvas.style.cursor = 'move';
+                    } else {
+                        this.canvas.style.cursor = this.addMode ? 'crosshair' : 'default';
+                    }
+                }
+            }
+
+            if (this.isDragging && this.draggedCow) {
+                const { worldX, worldY } = this.canvasToWorld(mouseX, mouseY);
+
+                const clampedX = Math.max(this.config.xMin, Math.min(this.config.xMax, worldX));
+                const clampedY = Math.max(this.config.yMin, Math.min(this.config.yMax, worldY));
+
+                const newPositionID = this.worldToPositionID(clampedX, clampedY);
+                this.draggedCow.positionID = newPositionID;
+
+                this.render();
+            } else if (this.isDraggingTrajectoryPoint) {
+                const frame = this.getCurrentFrame();
+                if (frame && frame.jsonData) {
+                    const cow = frame.jsonData.find(c => c.personID === this.trajectoryData.cowId);
+                    if (cow) {
+                        const { worldX, worldY } = this.canvasToWorld(mouseX, mouseY);
+
+                        const clampedX = Math.max(this.config.xMin, Math.min(this.config.xMax, worldX));
+                        const clampedY = Math.max(this.config.yMin, Math.min(this.config.yMax, worldY));
+
+                        const newPositionID = this.worldToPositionID(clampedX, clampedY);
+                        cow.positionID = newPositionID;
+
+                        const posIndex = this.trajectoryData.positions.findIndex(
+                            p => p.frameIndex === this.currentFrameIndex
+                        );
+                        if (posIndex >= 0) {
+                            this.trajectoryData.positions[posIndex].positionID = newPositionID;
+                            this.trajectoryData.positions[posIndex].worldX = clampedX;
+                            this.trajectoryData.positions[posIndex].worldY = clampedY;
+                        }
+
+                        this.render();
+                    }
+                }
+            } else if (this.isPanning) {
+                const dx = mouseX - this.lastMouseX;
+                const dy = mouseY - this.lastMouseY;
+
+                this.offset.x += dx;
+                this.offset.y += dy;
+
+                this.lastMouseX = mouseX;
+                this.lastMouseY = mouseY;
+
+                this.render();
+            }
+        }
+
+        onMouseUp(e) {
+            if (this.isDragging) {
+                this.isDragging = false;
+                this.draggedCow = null;
+                this.autoSave();
+            }
+
+            if (this.isDraggingTrajectoryPoint) {
+                this.isDraggingTrajectoryPoint = false;
+                this.updateTrajectoryInfo();
+                this.detectTrajectoryIssues();
+                this.drawTimeline();
+                this.autoSave();
+            }
+
+            this.isPanning = false;
+        }
+
+        onWheel(e) {
+            e.preventDefault();
+
+            const delta = e.deltaY > 0 ? 0.9 : 1.1;
+            this.zoom = Math.max(0.5, Math.min(3.0, this.zoom * delta));
+
+            document.getElementById('zoom-slider').value = this.zoom * 100;
+            document.getElementById('zoom-display').textContent = `${Math.round(this.zoom * 100)}%`;
+
+            this.render();
+        }
+
+        onKeyDown(e) {
+            if (this.trajectoryMode && this.trajectoryData) {
+                switch(e.key) {
+                    case 'ArrowLeft':
+                        if (e.shiftKey) {
+                            e.preventDefault();
+                            this.previousTrajectoryFrame();
+                            return;
+                        }
+                        break;
+                    case 'ArrowRight':
+                        if (e.shiftKey) {
+                            e.preventDefault();
+                            this.nextTrajectoryFrame();
+                            return;
+                        }
+                        break;
+                    case 'a':
+                    case 'A':
+                        if (e.ctrlKey || e.metaKey) {
+                            e.preventDefault();
+                            this.addTrackedCowToCurrentFrame();
+                            return;
+                        }
+                        break;
+                }
+            }
+
+            switch(e.key) {
+                case 'ArrowLeft':
+                    this.previousFrame();
+                    break;
+                case 'ArrowRight':
+                    this.nextFrame();
+                    break;
+                case 'Delete':
+                case 'Backspace':
+                    if (this.selectedCowId !== null) {
+                        e.preventDefault();
+                        this.deleteSelectedCow();
+                    }
+                    break;
+                case 'z':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        if (e.shiftKey) {
+                            this.redo();
+                        } else {
+                            this.undo();
+                        }
+                    }
+                    break;
+            }
+        }
+
+        // ============== BATCH POSITION EDIT ==============
+
+        updateBatchInputVisibility() {
+            const method = document.getElementById('batch-position-method').value;
+
+            document.getElementById('batch-world-inputs').style.display = method === 'world' ? 'block' : 'none';
+            document.getElementById('batch-grid-inputs').style.display = method === 'grid' ? 'block' : 'none';
+            document.getElementById('batch-posid-input').style.display = method === 'positionID' ? 'block' : 'none';
+        }
+
+        useSelectedCow() {
+            if (this.selectedCowId !== null) {
+                document.getElementById('batch-cow-id').value = this.selectedCowId;
+
+                // Also populate current position
+                const frame = this.getCurrentFrame();
+                if (frame && frame.jsonData) {
+                    const cow = frame.jsonData.find(c => c.personID === this.selectedCowId);
+                    if (cow) {
+                        const { worldX, worldY } = this.positionIDToWorld(cow.positionID);
+                        document.getElementById('batch-world-x').value = Math.round(worldX);
+                        document.getElementById('batch-world-y').value = Math.round(worldY);
+
+                        const { gridX, gridY } = this.positionIDToGrid(cow.positionID);
+                        document.getElementById('batch-grid-x').value = gridX;
+                        document.getElementById('batch-grid-y').value = gridY;
+
+                        document.getElementById('batch-position-id').value = cow.positionID;
+                    }
+                }
+            } else {
+                this.showMessage('No cow selected', true);
+            }
+        }
+
+        useCurrentFrameRange() {
+            if (this.currentFrameIndex >= 0) {
+                document.getElementById('batch-frame-start').value = this.currentFrameIndex;
+                document.getElementById('batch-frame-end').value = this.currentFrameIndex;
+            }
+        }
+
+        previewBatchPosition() {
+            const validation = this.validateBatchInputs();
+            if (!validation.valid) {
+                this.showMessage(validation.error, true);
+                return;
+            }
+
+            const { cowId, frameStart, frameEnd, positionID, addMissing, updateExisting } = validation;
+
+            let existingCount = 0;
+            let missingCount = 0;
+
+            for (let i = frameStart; i <= frameEnd; i++) {
+                const frame = this.frames[i];
+                if (frame && frame.jsonData) {
+                    const exists = frame.jsonData.some(c => c.personID === cowId);
+                    if (exists) {
+                        existingCount++;
+                    } else {
+                        missingCount++;
+                    }
+                }
+            }
+
+            const totalFrames = frameEnd - frameStart + 1;
+            const { worldX, worldY } = this.positionIDToWorld(positionID);
+            const { gridX, gridY } = this.positionIDToGrid(positionID);
+
+            const previewDiv = document.getElementById('batch-preview-info');
+            previewDiv.innerHTML = `
+                <strong>Preview:</strong><br>
+                Cow ID: ${cowId}<br>
+                Frames: ${frameStart} to ${frameEnd} (${totalFrames} total)<br>
+                Position: (${worldX.toFixed(0)}, ${worldY.toFixed(0)}) cm<br>
+                Grid: (${gridX}, ${gridY}), ID: ${positionID}<br>
+                <br>
+                Existing: ${existingCount} frames${updateExisting ? ' → Will update' : ' → Will skip'}<br>
+                Missing: ${missingCount} frames${addMissing ? ' → Will add' : ' → Will skip'}<br>
+                <br>
+                Total changes: ${(updateExisting ? existingCount : 0) + (addMissing ? missingCount : 0)} frames
+            `;
+            previewDiv.style.display = 'block';
+        }
+
+        validateBatchInputs() {
+            const cowId = parseInt(document.getElementById('batch-cow-id').value);
+            const frameStart = parseInt(document.getElementById('batch-frame-start').value);
+            const frameEnd = parseInt(document.getElementById('batch-frame-end').value);
+            const method = document.getElementById('batch-position-method').value;
+            const addMissing = document.getElementById('batch-add-missing').checked;
+            const updateExisting = document.getElementById('batch-update-existing').checked;
+
+            if (isNaN(cowId)) {
+                return { valid: false, error: 'Please enter a valid cow ID' };
+            }
+
+            if (isNaN(frameStart) || isNaN(frameEnd)) {
+                return { valid: false, error: 'Please enter valid frame range' };
+            }
+
+            if (frameStart > frameEnd) {
+                return { valid: false, error: 'Start frame must be <= end frame' };
+            }
+
+            if (frameStart < 0 || frameEnd >= this.frames.length) {
+                return { valid: false, error: 'Frame range out of bounds' };
+            }
+
+            let positionID;
+
+            if (method === 'world') {
+                const worldX = parseFloat(document.getElementById('batch-world-x').value);
+                const worldY = parseFloat(document.getElementById('batch-world-y').value);
+
+                if (isNaN(worldX) || isNaN(worldY)) {
+                    return { valid: false, error: 'Please enter valid world coordinates' };
+                }
+
+                positionID = this.worldToPositionID(worldX, worldY);
+            } else if (method === 'grid') {
+                const gridX = parseInt(document.getElementById('batch-grid-x').value);
+                const gridY = parseInt(document.getElementById('batch-grid-y').value);
+
+                if (isNaN(gridX) || isNaN(gridY)) {
+                    return { valid: false, error: 'Please enter valid grid coordinates' };
+                }
+
+                positionID = this.gridToPositionID(gridX, gridY);
+            } else if (method === 'positionID') {
+                positionID = parseInt(document.getElementById('batch-position-id').value);
+
+                if (isNaN(positionID)) {
+                    return { valid: false, error: 'Please enter a valid position ID' };
+                }
+            } else if (method === 'current') {
+                const frame = this.getCurrentFrame();
+                if (!frame || !frame.jsonData) {
+                    return { valid: false, error: 'No current frame available' };
+                }
+
+                const cow = frame.jsonData.find(c => c.personID === cowId);
+                if (!cow) {
+                    return { valid: false, error: `Cow ${cowId} not found in current frame` };
+                }
+
+                positionID = cow.positionID;
+            }
+
+            return {
+                valid: true,
+                cowId,
+                frameStart,
+                frameEnd,
+                positionID,
+                addMissing,
+                updateExisting
+            };
+        }
+
+        applyBatchPosition() {
+            const validation = this.validateBatchInputs();
+            if (!validation.valid) {
+                this.showMessage(validation.error, true);
+                return;
+            }
+
+            const { cowId, frameStart, frameEnd, positionID, addMissing, updateExisting } = validation;
+
+            this.saveHistory();
+
+            let updatedCount = 0;
+            let addedCount = 0;
+
+            for (let i = frameStart; i <= frameEnd; i++) {
+                const frame = this.frames[i];
+                if (frame && frame.jsonData) {
+                    const cow = frame.jsonData.find(c => c.personID === cowId);
+
+                    if (cow) {
+                        // Cow exists
+                        if (updateExisting) {
+                            cow.positionID = positionID;
+                            updatedCount++;
+                        }
+                    } else {
+                        // Cow doesn't exist
+                        if (addMissing) {
+                            const newCow = {
+                                personID: cowId,
+                                positionID: positionID,
+                                views: [
+                                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 }
+                                ]
+                            };
+                            frame.jsonData.push(newCow);
+                            addedCount++;
+                        }
+                    }
+                }
+            }
+
+            // Hide preview
+            document.getElementById('batch-preview-info').style.display = 'none';
+
+            // Reload trajectory if in trajectory mode
+            if (this.trajectoryMode && this.trajectoryData && cowId === this.trajectoryData.cowId) {
+                this.loadTrajectory();
+            }
+
+            this.render();
+            this.autoSave();
+            this.showMessage(`Batch edit complete: Updated ${updatedCount}, Added ${addedCount}`);
+        }
+
+        // ============== COW MANAGEMENT ==============
+
+        addCowAtPosition(canvasX, canvasY) {
+            const frame = this.getCurrentFrame();
+            if (!frame) return;
+
+            const { worldX, worldY } = this.canvasToWorld(canvasX, canvasY);
+            const positionID = this.worldToPositionID(worldX, worldY);
+
+            let cowId = parseInt(document.getElementById('new-cow-id').value);
+            if (isNaN(cowId) || cowId <= 0) {
+                const existingIds = frame.jsonData.map(c => c.personID);
+                cowId = 1;
+                while (existingIds.includes(cowId)) {
+                    cowId++;
+                }
+            }
+
+            if (frame.jsonData.some(c => c.personID === cowId)) {
+                this.showMessage(`Cow ID ${cowId} already exists!`, true);
+                return;
+            }
+
+            const newCow = {
+                personID: cowId,
+                positionID: positionID,
+                views: [
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 }
+                ]
+            };
+
+            this.saveHistory();
+            frame.jsonData.push(newCow);
+            this.selectedCowId = cowId;
+
+            this.updateCowList();
+            this.render();
+            this.autoSave();
+            this.showMessage(`Added cow ${cowId}`);
+
+            document.getElementById('new-cow-id').value = '';
+        }
+
+        addTrackedCowAtPosition(canvasX, canvasY) {
+            if (!this.trajectoryData) return;
+
+            const frame = this.getCurrentFrame();
+            if (!frame) return;
+
+            const { worldX, worldY } = this.canvasToWorld(canvasX, canvasY);
+            const positionID = this.worldToPositionID(worldX, worldY);
+
+            const newCow = {
+                personID: this.trajectoryData.cowId,
+                positionID: positionID,
+                views: [
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 }
+                ]
+            };
+
+            this.saveHistory();
+            frame.jsonData.push(newCow);
+            this.selectedCowId = this.trajectoryData.cowId;
+
+            this.loadTrajectory();
+            this.autoSave();
+            this.showMessage(`Added cow ${this.trajectoryData.cowId} to frame`);
+        }
+
+        addTrackedCowToCurrentFrame() {
+            if (!this.trajectoryData) return;
+
+            const frame = this.getCurrentFrame();
+            if (!frame) return;
+
+            if (frame.jsonData.some(c => c.personID === this.trajectoryData.cowId)) {
+                this.showMessage('Cow already exists in this frame', true);
+                return;
+            }
+
+            const { positions } = this.trajectoryData;
+            let nearestPos = null;
+            let minDiff = Infinity;
+
+            for (const pos of positions) {
+                const diff = Math.abs(pos.frameIndex - this.currentFrameIndex);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    nearestPos = pos;
+                }
+            }
+
+            if (!nearestPos) return;
+
+            const newCow = {
+                personID: this.trajectoryData.cowId,
+                positionID: nearestPos.positionID,
+                views: [
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                    { xmin: -1, ymin: -1, xmax: -1, ymax: -1 }
+                ]
+            };
+
+            this.saveHistory();
+            frame.jsonData.push(newCow);
+            this.selectedCowId = this.trajectoryData.cowId;
+
+            this.loadTrajectory();
+            this.autoSave();
+            this.showMessage(`Added cow ${this.trajectoryData.cowId} to frame (Ctrl+A)`);
+        }
+
+        deleteSelectedCow() {
+            if (this.selectedCowId === null) return;
+
+            const frame = this.getCurrentFrame();
+            if (!frame) return;
+
+            this.saveHistory();
+
+            frame.jsonData = frame.jsonData.filter(c => c.personID !== this.selectedCowId);
+            const deletedId = this.selectedCowId;
+            this.selectedCowId = null;
+
+            if (this.trajectoryMode && this.trajectoryData && deletedId === this.trajectoryData.cowId) {
+                this.loadTrajectory();
+            }
+
+            this.updateCowList();
+            this.render();
+            this.autoSave();
+            this.showMessage(`Deleted cow ${deletedId}`);
+        }
+
+        toggleAddMode() {
+            this.addMode = document.getElementById('add-mode').checked;
+            this.canvas.style.cursor = this.addMode ? 'crosshair' : 'default';
+        }
+
+        // ============== TRAJECTORY MODE ==============
+
+        toggleTrajectoryMode() {
+            this.trajectoryMode = document.getElementById('trajectory-mode').checked;
+            const controls = document.getElementById('trajectory-controls');
+
+            if (this.trajectoryMode) {
+                controls.style.display = 'block';
+
+                if (this.selectedCowId !== null) {
+                    document.getElementById('track-cow-id').value = this.selectedCowId;
+                }
+
+                if (this.frames.length > 0) {
+                    document.getElementById('track-frame-start').value = 0;
+                    document.getElementById('track-frame-end').value = this.frames.length - 1;
+                }
+            } else {
+                controls.style.display = 'none';
+                this.clearTrajectory();
+            }
+        }
+
+        loadTrajectory() {
+            const cowId = parseInt(document.getElementById('track-cow-id').value);
+            const frameStart = parseInt(document.getElementById('track-frame-start').value);
+            const frameEnd = parseInt(document.getElementById('track-frame-end').value);
+
+            if (isNaN(cowId)) {
+                this.showMessage('Please enter a valid cow ID', true);
+                return;
+            }
+
+            if (isNaN(frameStart) || isNaN(frameEnd) || frameStart > frameEnd) {
+                this.showMessage('Please enter a valid frame range', true);
+                return;
+            }
+
+            if (frameStart < 0 || frameEnd >= this.frames.length) {
+                this.showMessage('Frame range out of bounds', true);
+                return;
+            }
+
+            const positions = [];
+            const missingFrames = [];
+
+            for (let i = frameStart; i <= frameEnd; i++) {
+                const frame = this.frames[i];
+                if (frame && frame.jsonData) {
+                    const cow = frame.jsonData.find(c => c.personID === cowId);
+                    if (cow) {
+                        const { worldX, worldY } = this.positionIDToWorld(cow.positionID);
+                        positions.push({
+                            frameIndex: i,
+                            frameName: frame.filename,
+                            positionID: cow.positionID,
+                            worldX,
+                            worldY
+                        });
+                    } else {
+                        missingFrames.push({ frameIndex: i, frameName: frame.filename });
+                    }
+                }
+            }
+
+            if (positions.length === 0) {
+                this.showMessage(`Cow ${cowId} not found in any frame in this range`, true);
+                return;
+            }
+
+            this.trajectoryData = {
+                cowId,
+                frameStart,
+                frameEnd,
+                positions,
+                missingFrames
+            };
+
+            this.currentGapIndex = 0;
+            this.selectedCowId = cowId;
+            this.updateTrajectoryInfo();
+            this.detectTrajectoryIssues();
+            this.drawTimeline();
+            this.render();
+
+            document.getElementById('trajectory-info').style.display = 'block';
+            this.showMessage(`Loaded trajectory for Cow ${cowId}: ${positions.length} frames (Shift+Arrows to navigate)`);
+        }
+
+        clearTrajectory() {
+            this.trajectoryData = null;
+            this.trajectoryIssues = [];
+            this.currentGapIndex = 0;
+            document.getElementById('trajectory-info').style.display = 'none';
+            document.getElementById('missing-frames-container').style.display = 'none';
+            document.getElementById('issues-container').style.display = 'none';
+            this.render();
+        }
+
+        previousTrajectoryFrame() {
+            if (!this.trajectoryData) return;
+
+            const { frameStart, frameEnd } = this.trajectoryData;
+
+            if (this.currentFrameIndex > frameStart) {
+                this.currentFrameIndex--;
+                this.render();
+                this.drawTimeline();
+            }
+        }
+
+        nextTrajectoryFrame() {
+            if (!this.trajectoryData) return;
+
+            const { frameStart, frameEnd } = this.trajectoryData;
+
+            if (this.currentFrameIndex < frameEnd) {
+                this.currentFrameIndex++;
+                this.render();
+                this.drawTimeline();
+            }
+        }
+
+        updateTrajectoryInfo() {
+            if (!this.trajectoryData) return;
+
+            const { positions, missingFrames, frameStart, frameEnd } = this.trajectoryData;
+            const totalFrames = frameEnd - frameStart + 1;
+            const presentFrames = positions.length;
+            const missingCount = missingFrames.length;
+
+            let totalDistance = 0;
+            let maxJump = 0;
+            let maxJumpFrames = null;
+
+            for (let i = 1; i < positions.length; i++) {
+                const prev = positions[i - 1];
+                const curr = positions[i];
+                const dx = curr.worldX - prev.worldX;
+                const dy = curr.worldY - prev.worldY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                totalDistance += dist;
+
+                if (dist > maxJump) {
+                    maxJump = dist;
+                    maxJumpFrames = `${prev.frameIndex}→${curr.frameIndex}`;
+                }
+            }
+
+            const avgSpeed = positions.length > 1 ? totalDistance / (positions.length - 1) : 0;
+
+            document.getElementById('traj-present').textContent = presentFrames;
+            document.getElementById('traj-total').textContent = totalFrames;
+            document.getElementById('traj-missing').textContent = missingCount;
+            document.getElementById('traj-speed').textContent = avgSpeed.toFixed(1);
+            document.getElementById('traj-max-jump').textContent =
+                maxJumpFrames ? `${maxJump.toFixed(0)} (${maxJumpFrames})` : '0';
+
+            if (missingFrames.length > 0) {
+                document.getElementById('missing-frames-container').style.display = 'block';
+                const listDiv = document.getElementById('missing-frames-list');
+                listDiv.innerHTML = missingFrames.map(mf =>
+                    `<div onclick="app.jumpToFrameIndex(${mf.frameIndex})">${mf.frameName}</div>`
+                ).join('');
+            } else {
+                document.getElementById('missing-frames-container').style.display = 'none';
+            }
+        }
+
+        drawTimeline() {
+            if (!this.trajectoryData) return;
+
+            const canvas = document.getElementById('timeline-canvas');
+            const ctx = canvas.getContext('2d');
+
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+
+            const { frameStart, frameEnd, positions, missingFrames } = this.trajectoryData;
+            const totalFrames = frameEnd - frameStart + 1;
+            const barWidth = canvas.width / totalFrames;
+
+            for (let i = frameStart; i <= frameEnd; i++) {
+                const x = (i - frameStart) * barWidth;
+                const hasData = positions.some(p => p.frameIndex === i);
+                const isCurrent = i === this.currentFrameIndex;
+
+                if (isCurrent) {
+                    ctx.fillStyle = '#FFD700';
+                } else if (hasData) {
+                    ctx.fillStyle = '#4CAF50';
+                } else {
+                    ctx.fillStyle = '#f44336';
+                }
+
+                ctx.fillRect(x, 0, Math.max(1, barWidth - 1), canvas.height);
+            }
+
+            canvas.onclick = (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const frameIndex = Math.floor((x / canvas.width) * totalFrames) + frameStart;
+
+                if (frameIndex >= 0 && frameIndex < this.frames.length) {
+                    this.currentFrameIndex = frameIndex;
+                    this.selectedCowId = this.trajectoryData.cowId;
+                    this.render();
+                    this.drawTimeline();
+                }
+            };
+        }
+
+        detectTrajectoryIssues() {
+            if (!this.trajectoryData) return;
+
+            this.trajectoryIssues = [];
+            const { positions, cowId } = this.trajectoryData;
+            const jumpThreshold = 100;
+
+            for (let i = 1; i < positions.length; i++) {
+                const prev = positions[i - 1];
+                const curr = positions[i];
+                const dx = curr.worldX - prev.worldX;
+                const dy = curr.worldY - prev.worldY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist > jumpThreshold) {
+                    this.trajectoryIssues.push({
+                        type: 'large_jump',
+                        frameIndex: curr.frameIndex,
+                        prevFrameIndex: prev.frameIndex,
+                        frameName: curr.frameName,
+                        distance: dist,
+                        message: `Large jump: ${dist.toFixed(0)} cm between frames ${prev.frameIndex} and ${curr.frameIndex}`
+                    });
+                }
+            }
+
+            if (this.trajectoryIssues.length > 0) {
+                document.getElementById('issues-container').style.display = 'block';
+                const listDiv = document.getElementById('issues-list');
+                listDiv.innerHTML = this.trajectoryIssues.map(issue =>
+                    `<div onclick="app.jumpToFrameIndex(${issue.frameIndex})">${issue.message}</div>`
+                ).join('');
+            } else {
+                document.getElementById('issues-container').style.display = 'none';
+            }
+        }
+
+        fillTrajectoryGaps() {
+            if (!this.trajectoryData || this.trajectoryData.missingFrames.length === 0) {
+                this.showMessage('No gaps to fill', true);
+                return;
+            }
+
+            const { cowId, positions, missingFrames, frameStart, frameEnd } = this.trajectoryData;
+
+            this.saveHistory();
+
+            let filledCount = 0;
+
+            for (const missing of missingFrames) {
+                const missingIndex = missing.frameIndex;
+
+                let prevPos = null;
+                let nextPos = null;
+
+                for (let i = positions.length - 1; i >= 0; i--) {
+                    if (positions[i].frameIndex < missingIndex) {
+                        prevPos = positions[i];
+                        break;
+                    }
+                }
+
+                for (let i = 0; i < positions.length; i++) {
+                    if (positions[i].frameIndex > missingIndex) {
+                        nextPos = positions[i];
+                        break;
+                    }
+                }
+
+                if (prevPos && nextPos) {
+                    const frameDiff = nextPos.frameIndex - prevPos.frameIndex;
+                    const progress = (missingIndex - prevPos.frameIndex) / frameDiff;
+
+                    const interpolatedX = prevPos.worldX + (nextPos.worldX - prevPos.worldX) * progress;
+                    const interpolatedY = prevPos.worldY + (nextPos.worldY - prevPos.worldY) * progress;
+                    const interpolatedPosID = this.worldToPositionID(interpolatedX, interpolatedY);
+
+                    const frame = this.frames[missingIndex];
+                    if (frame && frame.jsonData) {
+                        const newCow = {
+                            personID: cowId,
+                            positionID: interpolatedPosID,
+                            views: [
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 }
+                            ]
+                        };
+
+                        frame.jsonData.push(newCow);
+                        filledCount++;
+                    }
+                } else if (prevPos && !nextPos) {
+                    const frame = this.frames[missingIndex];
+                    if (frame && frame.jsonData) {
+                        const newCow = {
+                            personID: cowId,
+                            positionID: prevPos.positionID,
+                            views: [
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 }
+                            ]
+                        };
+
+                        frame.jsonData.push(newCow);
+                        filledCount++;
+                    }
+                } else if (!prevPos && nextPos) {
+                    const frame = this.frames[missingIndex];
+                    if (frame && frame.jsonData) {
+                        const newCow = {
+                            personID: cowId,
+                            positionID: nextPos.positionID,
+                            views: [
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 },
+                                { xmin: -1, ymin: -1, xmax: -1, ymax: -1 }
+                            ]
+                        };
+
+                        frame.jsonData.push(newCow);
+                        filledCount++;
+                    }
+                }
+            }
+
+            this.loadTrajectory();
+            this.autoSave();
+            this.showMessage(`Filled ${filledCount} gaps`);
+        }
+
+        smoothTrajectory() {
+            if (!this.trajectoryData || this.trajectoryData.positions.length < 3) {
+                this.showMessage('Not enough points to smooth', true);
+                return;
+            }
+
+            this.saveHistory();
+
+            const { cowId, positions } = this.trajectoryData;
+
+            const windowSize = 3;
+            const smoothed = [];
+
+            for (let i = 0; i < positions.length; i++) {
+                const start = Math.max(0, i - Math.floor(windowSize / 2));
+                const end = Math.min(positions.length - 1, i + Math.floor(windowSize / 2));
+
+                let sumX = 0, sumY = 0, count = 0;
+
+                for (let j = start; j <= end; j++) {
+                    sumX += positions[j].worldX;
+                    sumY += positions[j].worldY;
+                    count++;
+                }
+
+                smoothed.push({
+                    frameIndex: positions[i].frameIndex,
+                    worldX: sumX / count,
+                    worldY: sumY / count
+                });
+            }
+
+            for (const smooth of smoothed) {
+                const frame = this.frames[smooth.frameIndex];
+                if (frame && frame.jsonData) {
+                    const cow = frame.jsonData.find(c => c.personID === cowId);
+                    if (cow) {
+                        cow.positionID = this.worldToPositionID(smooth.worldX, smooth.worldY);
+                    }
+                }
+            }
+
+            this.loadTrajectory();
+            this.autoSave();
+            this.showMessage('Trajectory smoothed');
+        }
+
+        jumpToNextGap() {
+            if (!this.trajectoryData || this.trajectoryData.missingFrames.length === 0) {
+                this.showMessage('No gaps found', true);
+                return;
+            }
+
+            const { missingFrames } = this.trajectoryData;
+
+            let found = false;
+            for (let i = 0; i < missingFrames.length; i++) {
+                if (missingFrames[i].frameIndex > this.currentFrameIndex) {
+                    this.currentFrameIndex = missingFrames[i].frameIndex;
+                    this.currentGapIndex = i;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                this.currentFrameIndex = missingFrames[0].frameIndex;
+                this.currentGapIndex = 0;
+            }
+
+            this.selectedCowId = this.trajectoryData.cowId;
+            this.render();
+            this.drawTimeline();
+        }
+
+        jumpToFrameIndex(frameIndex) {
+            if (frameIndex >= 0 && frameIndex < this.frames.length) {
+                this.currentFrameIndex = frameIndex;
+                if (this.trajectoryData) {
+                    this.selectedCowId = this.trajectoryData.cowId;
+                }
+                this.render();
+                if (this.trajectoryMode) {
+                    this.drawTimeline();
+                }
+            }
+        }
+
+        // ============== FRAME NAVIGATION ==============
+
+        getCurrentFrame() {
+            if (this.currentFrameIndex >= 0 && this.currentFrameIndex < this.frames.length) {
+                return this.frames[this.currentFrameIndex];
+            }
+            return null;
+        }
+
+        previousFrame() {
+            if (this.currentFrameIndex > 0) {
+                this.currentFrameIndex--;
+                if (!this.trajectoryMode) {
+                    this.selectedCowId = null;
+                }
+                this.resetHistory();
+                this.render();
+                if (this.trajectoryMode) {
+                    this.drawTimeline();
+                }
+            }
+        }
+
+        nextFrame() {
+            if (this.currentFrameIndex < this.frames.length - 1) {
+                this.currentFrameIndex++;
+                if (!this.trajectoryMode) {
+                    this.selectedCowId = null;
+                }
+                this.resetHistory();
+                this.render();
+                if (this.trajectoryMode) {
+                    this.drawTimeline();
+                }
+            }
+        }
+
+        jumpToFrame() {
+            const frameNum = parseInt(document.getElementById('frame-jump').value);
+            if (isNaN(frameNum)) return;
+
+            const index = this.frames.findIndex(f => {
+                const num = parseInt(f.filename.match(/\d+/));
+                return num === frameNum;
+            });
+
+            if (index >= 0) {
+                this.currentFrameIndex = index;
+                if (!this.trajectoryMode) {
+                    this.selectedCowId = null;
+                }
+                this.resetHistory();
+                this.render();
+                if (this.trajectoryMode) {
+                    this.drawTimeline();
+                }
+            } else {
+                this.showMessage(`Frame ${frameNum} not found`, true);
+            }
+        }
+
+        // ============== UI UPDATES ==============
+
+        updateUI() {
+            const frame = this.getCurrentFrame();
+
+            if (frame) {
+                document.getElementById('frame-name').textContent = frame.filename;
+                document.getElementById('current-frame-display').textContent = frame.filename;
+
+                const cowCount = frame.jsonData ? frame.jsonData.length : 0;
+                document.getElementById('cow-count').textContent = cowCount;
+                document.getElementById('info-cow-count').textContent = cowCount;
+
+                document.getElementById('selected-cow').textContent =
+                    this.selectedCowId !== null ? `Cow ${this.selectedCowId}` : 'None';
+
+                this.updateCowList();
+            } else {
+                document.getElementById('frame-name').textContent = '-';
+                document.getElementById('current-frame-display').textContent = '-';
+                document.getElementById('cow-count').textContent = '0';
+                document.getElementById('info-cow-count').textContent = '0';
+                document.getElementById('selected-cow').textContent = 'None';
+            }
+        }
+
+        updateCowList() {
+            const frame = this.getCurrentFrame();
+            const listDiv = document.getElementById('cow-list');
+            listDiv.innerHTML = '';
+
+            if (!frame || !frame.jsonData) return;
+
+            const sortedCows = [...frame.jsonData].sort((a, b) => a.personID - b.personID);
+
+            for (const cow of sortedCows) {
+                const { worldX, worldY } = this.positionIDToWorld(cow.positionID);
+
+                const div = document.createElement('div');
+                div.className = 'cow-item';
+                if (cow.personID === this.selectedCowId) {
+                    div.classList.add('selected');
+                }
+
+                div.innerHTML = `
+                    <div class="cow-item-info">
+                        <span class="cow-item-id">Cow ${cow.personID}</span><br>
+                        <small>Pos: (${worldX.toFixed(0)}, ${worldY.toFixed(0)}) cm</small><br>
+                        <small>Grid: ${cow.positionID}</small>
+                    </div>
+                    <button class="cow-item-delete" onclick="app.deleteCow(${cow.personID})">×</button>
+                `;
+
+                div.onclick = (e) => {
+                    if (!e.target.classList.contains('cow-item-delete')) {
+                        this.selectedCowId = cow.personID;
+                        this.updateCowList();
+                        this.render();
+                    }
+                };
+
+                listDiv.appendChild(div);
+            }
+        }
+
+        deleteCow(cowId) {
+            this.selectedCowId = cowId;
+            this.deleteSelectedCow();
+        }
+
+        // ============== VIEW CONTROLS ==============
+
+        setZoom(value) {
+            this.zoom = value / 100;
+            document.getElementById('zoom-display').textContent = `${Math.round(value)}%`;
+            this.render();
+        }
+
+        resetView() {
+            this.zoom = 1.0;
+            this.offset = { x: 0, y: 0 };
+            document.getElementById('zoom-slider').value = 100;
+            document.getElementById('zoom-display').textContent = '100%';
+            this.render();
+        }
+
+        // ============== HISTORY (UNDO/REDO) ==============
+
+        saveHistory() {
+            const frame = this.getCurrentFrame();
+            if (!frame) return;
+
+            this.history = this.history.slice(0, this.historyIndex + 1);
+
+            const state = JSON.parse(JSON.stringify(frame.jsonData));
+            this.history.push(state);
+            this.historyIndex++;
+
+            if (this.history.length > 50) {
+                this.history.shift();
+                this.historyIndex--;
+            }
+
+            this.updateHistoryButtons();
+        }
+
+        resetHistory() {
+            this.history = [];
+            this.historyIndex = -1;
+            this.updateHistoryButtons();
+        }
+
+        undo() {
+            if (this.historyIndex > 0) {
+                this.historyIndex--;
+                const frame = this.getCurrentFrame();
+                if (frame) {
+                    frame.jsonData = JSON.parse(JSON.stringify(this.history[this.historyIndex]));
+
+                    if (this.trajectoryMode && this.trajectoryData) {
+                        this.loadTrajectory();
+                    }
+
+                    this.render();
+                    this.autoSave();
+                }
+            }
+            this.updateHistoryButtons();
+        }
+
+        redo() {
+            if (this.historyIndex < this.history.length - 1) {
+                this.historyIndex++;
+                const frame = this.getCurrentFrame();
+                if (frame) {
+                    frame.jsonData = JSON.parse(JSON.stringify(this.history[this.historyIndex]));
+
+                    if (this.trajectoryMode && this.trajectoryData) {
+                        this.loadTrajectory();
+                    }
+
+                    this.render();
+                    this.autoSave();
+                }
+            }
+            this.updateHistoryButtons();
+        }
+
+        updateHistoryButtons() {
+            document.getElementById('undo-btn').disabled = this.historyIndex <= 0;
+            document.getElementById('redo-btn').disabled = this.historyIndex >= this.history.length - 1;
+        }
+
+        // ============== SAVE/EXPORT ==============
+
+        autoSave() {
+            this.saveToLocalStorage();
+            document.getElementById('autosave-status').textContent = 'Saved ✓';
+            setTimeout(() => {
+                document.getElementById('autosave-status').textContent = 'Enabled';
+            }, 2000);
+        }
+
+        saveCurrentFrame() {
+            const frame = this.getCurrentFrame();
+            if (!frame) {
+                this.showMessage('No frame to save', true);
+                return;
+            }
+
+            this.saveToLocalStorage();
+            this.showMessage(`Frame ${frame.filename} saved`);
+        }
+
+        exportCurrentFrame() {
+            const frame = this.getCurrentFrame();
+            if (!frame) {
+                this.showMessage('No frame to export', true);
+                return;
+            }
+
+            const jsonStr = JSON.stringify(frame.jsonData, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${frame.filename}.json`;
+            a.click();
+
+            URL.revokeObjectURL(url);
+            this.showMessage(`Exported ${frame.filename}.json`);
+        }
+
+        async exportAllFrames() {
+            if (this.frames.length === 0) {
+                this.showMessage('No frames to export', true);
+                return;
+            }
+
+            if (typeof JSZip === 'undefined') {
+                this.showMessage('JSZip library not loaded. Please refresh the page.', true);
+                return;
+            }
+
+            this.showLoading(`Creating ZIP file with ${this.frames.length} files...`);
+
+            try {
+                const zip = new JSZip();
+
+                for (const frame of this.frames) {
+                    if (frame.jsonData) {
+                        const jsonStr = JSON.stringify(frame.jsonData, null, 2);
+                        zip.file(`${frame.filename}.json`, jsonStr);
+                    }
+                }
+
+                const blob = await zip.generateAsync({
+                    type: 'blob',
+                    compression: 'DEFLATE',
+                    compressionOptions: {
+                        level: 6
+                    }
+                }, (metadata) => {
+                    const percent = metadata.percent.toFixed(0);
+                    this.updateLoadingText(`Creating ZIP: ${percent}%`);
+                });
+
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+                a.download = `cow_annotations_${timestamp}.zip`;
+
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                URL.revokeObjectURL(url);
+
+                this.hideLoading();
+                this.showMessage(`Exported ${this.frames.length} files as ZIP`);
+            } catch (error) {
+                console.error('Error creating ZIP:', error);
+                this.hideLoading();
+                this.showMessage('Error creating ZIP file', true);
+            }
+        }
+
+        saveToLocalStorage() {
+            try {
+                const data = {
+                    frames: this.frames.map(f => ({
+                        filename: f.filename,
+                        jsonData: f.jsonData
+                    })),
+                    config: this.config,
+                    currentFrameIndex: this.currentFrameIndex
+                };
+                localStorage.setItem('cowAnnotations', JSON.stringify(data));
+            } catch (e) {
+                console.error('Error saving to localStorage:', e);
+                if (e.name === 'QuotaExceededError') {
+                    this.showMessage('Warning: Auto-save disabled due to storage limits', true);
+                }
+            }
+        }
+
+        loadFromLocalStorage() {
+            try {
+                const dataStr = localStorage.getItem('cowAnnotations');
+                if (dataStr) {
+                    const data = JSON.parse(dataStr);
+
+                    if (data.config) {
+                        this.config = data.config;
+                        this.updateGridDimensions();
+
+                        document.getElementById('x-min').value = this.config.xMin;
+                        document.getElementById('x-max').value = this.config.xMax;
+                        document.getElementById('y-min').value = this.config.yMin;
+                        document.getElementById('y-max').value = this.config.yMax;
+                        document.getElementById('cell-size').value = this.config.cellSize;
+                    }
+
+                    if (data.frames) {
+                        for (const frameData of data.frames) {
+                            const existing = this.frames.find(f => f.filename === frameData.filename);
+                            if (existing) {
+                                existing.jsonData = frameData.jsonData;
+                            }
+                        }
+                    }
+
+                    this.showMessage('Restored from auto-save');
+                }
+            } catch (e) {
+                console.error('Error loading from localStorage:', e);
+            }
+        }
+
+        // ============== LOADING OVERLAY ==============
+
+        showLoading(text = 'Processing...') {
+            const overlay = document.getElementById('loading-overlay');
+            const textEl = document.getElementById('loading-text');
+            textEl.textContent = text;
+            overlay.classList.add('active');
+        }
+
+        hideLoading() {
+            const overlay = document.getElementById('loading-overlay');
+            overlay.classList.remove('active');
+        }
+
+        updateLoadingText(text) {
+            const textEl = document.getElementById('loading-text');
+            textEl.textContent = text;
+        }
+
+        // ============== UTILITIES ==============
+
+        showMessage(text, isError = false) {
+            const msgDiv = document.getElementById('status-message');
+            msgDiv.textContent = text;
+            msgDiv.className = isError ? 'error' : '';
+            msgDiv.style.display = 'block';
+
+            setTimeout(() => {
+                msgDiv.style.display = 'none';
+            }, 3000);
+        }
+    }
+
+    let app;
+    window.addEventListener('DOMContentLoaded', () => {
+        app = new CowAnnotationApp();
+    });
+</script>
+</body>
+</html>
