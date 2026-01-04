@@ -13,6 +13,9 @@ Once the images are annotated, we can use the WorldTrack/localisation_tools/visu
 
 The JSON output files from using the visual_localization.py script that be further modified using our web-based annotation tool BEVineAnnotationTool.html which will work on a browser (only tested on Google Chrome). 
 
+[![Watch the video](https://img.youtube.com/vi/D_FNVcT1D2U/maxresdefault.jpg)](https://youtu.be/D_FNVcT1D2U)
+
+
 ## How to train 
 
 ```
