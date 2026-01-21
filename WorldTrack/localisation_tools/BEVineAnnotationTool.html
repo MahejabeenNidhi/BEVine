@@ -702,6 +702,19 @@
                     <button class="secondary" onclick="app.exportCurrentFrame()">📥 Export JSON</button>
                     <button class="secondary" onclick="app.exportAllFrames()">📦 Export All (ZIP)</button>
                 </div>
+
+                <!-- NEW: Ground Truth Export Options -->
+                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #444;">
+                    <label style="display: block; margin-bottom: 8px; font-size: 12px; color: #aaa;">Ground Truth Export Options</label>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="export-gt-files" checked>
+                        <label for="export-gt-files">Include GT files in export</label>
+                    </div>
+                    <div style="font-size: 11px; color: #666; margin-left: 24px; margin-top: 5px;">
+                        Generates gt_moda.txt and gt_mota.txt
+                    </div>
+                </div>
+
                 <div style="margin-top: 10px; font-size: 11px; color: #aaa;">
                     Auto-save: <span id="autosave-status">Enabled</span>
                 </div>
@@ -2504,61 +2517,197 @@
             this.showMessage(`Exported ${frame.filename}.json`);
         }
 
-        async exportAllFrames() {
+        // ============== GROUND TRUTH GENERATION ==============
+
+        generateGroundTruthFiles() {
             if (this.frames.length === 0) {
-                this.showMessage('No frames to export', true);
-                return;
+                return null;
             }
 
-            if (typeof JSZip === 'undefined') {
-                this.showMessage('JSZip library not loaded. Please refresh the page.', true);
-                return;
-            }
+            const modaLines = [];
+            const motaLines = [];
+            const seqNum = 1; // Sequence number for MOTA format
 
-            this.showLoading(`Creating ZIP file with ${this.frames.length} files...`);
+            // Process each frame in order
+            for (let frameIndex = 0; frameIndex < this.frames.length; frameIndex++) {
+                const frame = this.frames[frameIndex];
 
-            try {
-                const zip = new JSZip();
-
-                for (const frame of this.frames) {
-                    if (frame.jsonData) {
-                        const jsonStr = JSON.stringify(frame.jsonData, null, 2);
-                        zip.file(`${frame.filename}.json`, jsonStr);
-                    }
+                if (!frame.jsonData || frame.jsonData.length === 0) {
+                    continue;
                 }
 
-                const blob = await zip.generateAsync({
-                    type: 'blob',
-                    compression: 'DEFLATE',
-                    compressionOptions: {
-                        level: 6
-                    }
-                }, (metadata) => {
-                    const percent = metadata.percent.toFixed(0);
-                    this.updateLoadingText(`Creating ZIP: ${percent}%`);
-                });
+                // Extract frame number from filename
+                const frameNum = parseInt(frame.filename.match(/\d+/)?.[0] || frameIndex);
 
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
+                // Process each cow in this frame
+                for (const cow of frame.jsonData) {
+                    const personId = cow.personID;
+                    const positionId = cow.positionID;
 
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-                a.download = `cow_annotations_${timestamp}.zip`;
+                    // Convert positionID back to world coordinates
+                    const { worldX, worldY } = this.positionIDToWorld(positionId);
 
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
+                    // Round to reasonable precision (1 decimal place)
+                    const x = Math.round(worldX * 10) / 10;
+                    const y = Math.round(worldY * 10) / 10;
 
-                URL.revokeObjectURL(url);
+                    // MODA format: frame,x,y
+                    modaLines.push(`${frameNum},${x},${y}`);
 
-                this.hideLoading();
-                this.showMessage(`Exported ${this.frames.length} files as ZIP`);
-            } catch (error) {
-                console.error('Error creating ZIP:', error);
-                this.hideLoading();
-                this.showMessage('Error creating ZIP file', true);
+                    // MOTA format: seq_num,frame,id,-1,-1,-1,-1,1,x,y,-1
+                    motaLines.push(`${seqNum},${frameNum},${personId},-1,-1,-1,-1,1,${x},${y},-1`);
+                }
+            }
+
+            if (modaLines.length === 0) {
+                return null;
+            }
+
+            return {
+                moda: modaLines.join('\n'),
+                mota: motaLines.join('\n'),
+                entryCount: modaLines.length
+            };
+        }
+
+        generateGTReadme(entryCount) {
+            const timestamp = new Date().toISOString();
+
+            return `Ground Truth Files - Generated from Annotation Tool
+        =====================================================
+
+        Generated: ${timestamp}
+        Total Entries: ${entryCount}
+        Frames: ${this.frames.length}
+
+        Grid Configuration:
+        ------------------
+        X Range: ${this.config.xMin} to ${this.config.xMax} cm
+        Y Range: ${this.config.yMin} to ${this.config.yMax} cm
+        Cell Size: ${this.config.cellSize} cm
+        Grid Dimensions: ${this.gridWidth} × ${this.gridHeight}
+
+        File Formats:
+        -------------
+
+        gt_moda.txt:
+          Format: frame,x,y
+          Description: Frame number, X position (cm), Y position (cm)
+
+        gt_mota.txt:
+          Format: seq_num,frame,id,-1,-1,-1,-1,1,x,y,-1
+          Description: Sequence number, frame number, person ID, placeholder fields,
+                       confidence (1), X position (cm), Y position (cm), placeholder
+
+        Coordinate System:
+        ------------------
+        - Positions are in centimeters (cm)
+        - Origin: (${this.config.xMin}, ${this.config.yMin})
+        - Coordinates represent the center of grid cells
+
+        Usage:
+        ------
+        These files can be used directly for evaluation without further processing.
+        They are compatible with standard tracking evaluation tools.
+
+        Notes:
+        ------
+        - Frames without any cows have no entries in the ground truth files
+        - Position IDs have been converted back to world coordinates
+        - Coordinates are rounded to 1 decimal place for precision
+        `;
+        }
+
+        async exportAllFrames() {
+    if (this.frames.length === 0) {
+        this.showMessage('No frames to export', true);
+        return;
+    }
+
+    if (typeof JSZip === 'undefined') {
+        this.showMessage('JSZip library not loaded. Please refresh the page.', true);
+        return;
+    }
+
+    const includeGT = document.getElementById('export-gt-files').checked;
+
+    this.showLoading(`Creating ZIP file with ${this.frames.length} files...`);
+
+    try {
+        const zip = new JSZip();
+
+        // Create annotations folder for JSON files
+        const annotationsFolder = zip.folder('annotations_positions');
+
+        // Add all JSON files
+        for (const frame of this.frames) {
+            if (frame.jsonData) {
+                const jsonStr = JSON.stringify(frame.jsonData, null, 2);
+                annotationsFolder.file(`${frame.filename}.json`, jsonStr);
             }
         }
+
+        // Generate and add ground truth files if enabled
+        if (includeGT) {
+            this.updateLoadingText('Generating ground truth files...');
+
+            const gtFiles = this.generateGroundTruthFiles();
+
+            if (gtFiles) {
+                // Create evaluations folder
+                const evaluationsFolder = zip.folder('evaluations');
+
+                // Add ground truth files
+                evaluationsFolder.file('gt_moda.txt', gtFiles.moda);
+                evaluationsFolder.file('gt_mota.txt', gtFiles.mota);
+
+                // Add a README for the ground truth files
+                const readmeContent = this.generateGTReadme(gtFiles.entryCount);
+                evaluationsFolder.file('README.txt', readmeContent);
+
+                console.log(`Generated ground truth files with ${gtFiles.entryCount} entries`);
+            }
+        }
+
+        // Generate the ZIP file
+        this.updateLoadingText('Compressing files...');
+
+        const blob = await zip.generateAsync({
+            type: 'blob',
+            compression: 'DEFLATE',
+            compressionOptions: {
+                level: 6
+            }
+        }, (metadata) => {
+            const percent = metadata.percent.toFixed(0);
+            this.updateLoadingText(`Creating ZIP: ${percent}%`);
+        });
+
+        // Download the file
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        a.download = `cow_annotations_${timestamp}.zip`;
+
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        URL.revokeObjectURL(url);
+
+        this.hideLoading();
+
+        const gtMessage = includeGT ? ' (with ground truth files)' : '';
+        this.showMessage(`Exported ${this.frames.length} files as ZIP${gtMessage}`);
+
+    } catch (error) {
+        console.error('Error creating ZIP:', error);
+        this.hideLoading();
+        this.showMessage('Error creating ZIP file', true);
+    }
+}
 
         saveToLocalStorage() {
             try {
