@@ -5,10 +5,7 @@ data:
     batch_size: 2
     num_workers: 4
     accumulate_grad_batches: 8
-    #
-    # For full dataset: use "all"
-    # For data volume similar to JerCCows baseline: use "reduced"
-    sequences_file: "sequences_mmCows_all.json"  # ✅ CHANGED from reduced
+    sequences_file: "sequences_mmCows_all.json"  
     resolution: [117, 4, 192]  # Y, Z, X
     bounds: [0, 192, 0, 117, 0, 20]
 
@@ -17,7 +14,7 @@ model:
   resolution: [117, 4, 192]
   bounds: [0, 192, 0, 117, 0, 20]
 
-  # ✅ CRITICAL for cross-dataset testing later
+  # CRITICAL for cross-dataset testing later
   num_cameras: null  # NOT 4! Enables variable camera support
 
   # Model architecture
@@ -27,10 +24,10 @@ model:
   num_classes: 1
   z_sign: 1
 
-  # ✅ NEW: GCEF parameters
+  # GCEF parameters
   use_gcef: true  # Enable Enhanced Global Context Fusion
 
-  # Training parameters (✅ MUST MATCH multi-dataset config)
+  # Training parameters (MUST MATCH multi-dataset config)
   learning_rate: 0.001
   conf_threshold: 0.4
   max_detections: 100
