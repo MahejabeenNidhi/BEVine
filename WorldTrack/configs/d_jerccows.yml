@@ -1,0 +1,48 @@
+# WorldTrack/configs/d_jerccows_multiseq.yml
+#
+# Multi-sequence mmCows configuration with optional 2D tracking.
+data:
+  class_path: datasets.PedestrianDataModule
+  init_args:
+    data_dir: "/path/to/data"
+
+model:
+  resolution: [200, 4, 120]
+  bounds: [0, 120, 0, 200, 0, 200]
+  depth: [32, 50, 5000]
+  num_cameras: 8
+  use_temporal_cache: True
+
+  # ── image auxiliary loss (training-time) ──
+  use_image_aux_loss: true      # set true to enable offset+size img heads
+  img_aux_weight: 1.0
+
+  # ── 2D per-camera tracking (test-time) ──
+  use_2d_tracking: false         # set true to enable YOLO + backward matching
+  yolo_weights_path: "/path/to/weights/best.pt"
+  tau_score: 0.3
+  tau_match: 100.0
+  original_img_hw: [2160, 3840]
+
+  # ── calibration refinement ──
+  learn_calibration: true
+  cal_refine_reg_weight: 1.0e-4
+  lr_calib_scale: 0.1
+  reproj_camera_weighting: proportional
+  # I2: gate out cameras with < 3 observations
+  min_obs_per_camera: 3
+  reproj_soft_gate: false
+  # I3: Cauchy kernel, c=50px
+  reproj_loss_type: cauchy
+  reproj_robust_scale: 50.0
+  # I6: warmup 500 steps
+  calib_warmup_steps: 500
+  calib_warmup_mode: steps
+  use_reproj_loss: false
+  reproj_weight: 0.1
+  calibration_dir: ""
+  reset_calibration_at_test: false
+
+trainer:
+  max_epochs: 30
+  precision: bf16-mixed
