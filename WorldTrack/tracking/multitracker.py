@@ -3,6 +3,7 @@ from collections import deque
 from typing import List
 
 import numpy as np
+import torch
 
 from tracking import matching
 from tracking.kalman_filter import KalmanFilter
@@ -62,6 +63,15 @@ class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
 
     def __init__(self, xy, xy_prev, score, buffer_size=30):
+
+        # Convert at the tensor/NumPy boundary. The entire tracker is NumPy-based
+        # so bf16 tensors must be cast before they touch any NumPy code.
+        if isinstance(xy, torch.Tensor):
+            xy = xy.float().cpu().detach().numpy()
+        if isinstance(xy_prev, torch.Tensor):
+            xy_prev = xy_prev.float().cpu().detach().numpy()
+        if isinstance(score, torch.Tensor):
+            score = score.float().cpu().detach().item()
 
         # wait activate
         self._xy = xy

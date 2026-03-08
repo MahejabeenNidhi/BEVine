@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 import scipy.linalg
 
@@ -67,6 +68,8 @@ class KalmanFilter(object):
             to 0 mean.
 
         """
+        if isinstance(measurement, torch.Tensor):
+            measurement = measurement.float().cpu().detach().numpy()
         mean_pos = measurement
         mean_vel = np.zeros_like(mean_pos)
         mean = np.r_[mean_pos, mean_vel]
@@ -187,6 +190,8 @@ class KalmanFilter(object):
             Returns the measurement-corrected state distribution.
 
         """
+        if isinstance(measurement, torch.Tensor):
+            measurement = measurement.float().cpu().detach().numpy()
         projected_mean, projected_cov = self.project(mean, covariance)
 
         chol_factor, lower = scipy.linalg.cho_factor(projected_cov, lower=True, check_finite=False)
