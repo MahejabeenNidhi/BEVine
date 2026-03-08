@@ -1,0 +1,59 @@
+# WorldTrack/configs/d_mmcows.yml
+
+data:
+  class_path: datasets.PedestrianDataModule
+  init_args:
+    data_dir: "/path/to/data"
+
+model:
+  # Resolution: [Y, Z, X] = [grid_height, depth_slabs, grid_width]
+  resolution: [117, 4, 192]  # Y, Z, X
+
+  # Bounds in the "ref" frame = GRID coordinates
+  # xmin, xmax = 0, grid_width = 0, 192
+  # ymin, ymax = 0, grid_height = 0, 117
+  # zmin, zmax = 0, 200 (cm, since Z is unscaled)
+  bounds: [0, 192, 0, 117, 0, 200]
+
+  depth: [32, 50, 5000]
+
+  num_cameras: 4
+  use_temporal_cache: True
+
+  # ── image auxiliary loss (training-time) ──
+  use_image_aux_loss: false
+  img_aux_weight: 1.0
+  # ── 2D per-camera tracking (test-time) ──
+  use_2d_tracking: false
+  yolo_weights_path: "/path/to/weights/best.pt"
+  tau_score: 0.3
+  tau_match: 100.0
+  original_img_hw: [ 2800, 4480 ]
+  # ── 2D matching geometry ──
+  use_foot_point: true
+  adaptive_tau: true
+  tau_floor: 50.0
+  tau_fraction: 0.15
+  cost_gate_factor: 3.0
+  projection_margin: 0.02
+  # ── calibration refinement ──
+  learn_calibration: true
+  cal_refine_reg_weight: 1.0e-4
+  lr_calib_scale: 0.1
+  reproj_camera_weighting: proportional
+  # I2: mild gate (or 0 — all cameras well observed)
+  min_obs_per_camera: 2
+  reproj_soft_gate: false
+  # I3: Cauchy kernel
+  reproj_loss_type: cauchy
+  reproj_robust_scale: 50.0
+  # I6: shorter warmup (MmCows converges faster)
+  calib_warmup_steps: 300
+  calib_warmup_mode: steps
+  use_reproj_loss: false
+  reproj_weight: 0.1
+  calibration_dir: ""
+  reset_calibration_at_test: false
+
+trainer:
+  max_epochs: 60
