@@ -279,9 +279,76 @@ def camera2pixels(xyz, pix_T_cam):
 
     EPS = 1e-4
     # z = torch.clamp(z, min=EPS)
-    z[z <= 0] = z[z <= 0].clamp(max=-EPS)
+    z = torch.where(z <= 0, torch.clamp(z, max=-EPS), z)
     z[z >= 0] = z[z >= 0].clamp(min=EPS)
     x = (x * fx) / z + x0
     y = (y * fy) / z + y0
     xy = torch.stack([x, y], dim=-1)
     return xy
+
+def so3_exp(v):
+    """
+    Rodrigues / axis-angle → rotation matrix, pure PyTorch.
+
+    Parameters
+    ----------
+    v : (..., 3)  axis-angle vector (magnitude = rotation angle in rad)
+
+    Returns
+    -------
+    R : (..., 3, 3)  rotation matrix
+
+    Safe for zero vectors (returns identity without NaN gradients).
+    Uses Taylor-safe coefficients and avoids dividing by the raw norm
+    so that gradients remain finite everywhere.
+    """
+    batch_shape = v.shape[:-1]
+    device = v.device
+    dtype = v.dtype
+
+    # Skew-symmetric matrix of v (NOT of the unit vector)
+    vx, vy, vz = v.unbind(dim=-1)
+    zeros = torch.zeros_like(vx)
+    K = torch.stack([
+        zeros, -vz, vy,
+        vz, zeros, -vx,
+        -vy, vx, zeros,
+    ], dim=-1).reshape(*batch_shape, 3, 3)
+
+    theta_sq = (v * v).sum(dim=-1)  # (...)
+
+    eps = 1e-8
+    safe_mask = theta_sq > eps
+
+    # Replace theta_sq with a harmless constant (1.0) where it is
+    # near zero so that sqrt / division never see a dangerous value.
+    theta_sq_safe = torch.where(safe_mask, theta_sq,
+                                torch.ones_like(theta_sq))
+    theta_safe = torch.sqrt(theta_sq_safe)
+
+    # Large-angle coefficients (used when theta > sqrt(eps))
+    sinc_large = torch.sin(theta_safe) / theta_safe
+    cosc_large = (1.0 - torch.cos(theta_safe)) / theta_sq_safe
+
+    # Small-angle Taylor coefficients
+    sinc_small = 1.0 - theta_sq / 6.0
+    cosc_small = 0.5 - theta_sq / 24.0
+
+    sinc = torch.where(safe_mask, sinc_large, sinc_small)
+    cosc = torch.where(safe_mask, cosc_large, cosc_small)
+
+    # Expand to (..., 1, 1) for broadcasting with (..., 3, 3)
+    sinc = sinc[..., None, None]
+    cosc = cosc[..., None, None]
+
+    # Identity matrix with correct batch shape
+    I = torch.eye(3, device=device, dtype=dtype)
+    if batch_shape:
+        I = I.view(*([1] * len(batch_shape)), 3, 3).expand(
+            *batch_shape, 3, 3
+        )
+
+    # Rodrigues: R = I + sinc(θ) · K + cosc(θ) · K²
+    R = I + sinc * K + cosc * (K @ K)
+
+    return R

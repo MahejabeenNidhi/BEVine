@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 import utils.geom
 import utils.basic
+from utils.precision import fp32_inverse
 
 
 class VoxelUtil:
@@ -111,7 +112,7 @@ class VoxelUtil:
         mem_T_ref = self.get_mem_T_ref(B, Y, Z, X, assert_cube=assert_cube, device=device)
         # note safe_inverse is inapplicable here,
         # since the transform is nonrigid
-        ref_T_mem = mem_T_ref.inverse()
+        ref_T_mem = fp32_inverse(mem_T_ref)
         return ref_T_mem
 
     def get_inbounds(self, xyz, Y, Z, X, already_mem=False, padding=0.0, assert_cube=False):

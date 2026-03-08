@@ -38,43 +38,51 @@ def get_alpha(rot):
 def decoder(center_e, offset_e, size_e, rz_e=None, K=60):
     """
     center_e: B,1,H,W
-    offset_e: B,2,H,W
-    size_e: B,3,H,W
-    rz_e: B,8,H,W
-    id_e: B,C,H,W
+    offset_e: B,4,H,W  (channels 0-1: sub-pixel, channels 2-3: temporal)
     """
     batch, cat, height, width = center_e.size()
     center_e = _nms(center_e)
 
-    topk_scores, topk_inds = torch.topk(center_e.view(batch, cat, -1), K)
-
+    topk_scores, topk_inds = torch.topk(
+        center_e.view(batch, cat, -1), K
+    )
     topk_inds = topk_inds % (height * width)
-    ys = (topk_inds / width).int().float()
-    xs = (topk_inds % width).int().float()
+    ys = (topk_inds // width).float()
+    xs = (topk_inds % width).float()
 
-    scores, topk_ind = torch.topk(topk_scores.view(batch, -1), K)
-    clses = (topk_ind / K).int()
+    scores, topk_ind = torch.topk(
+        topk_scores.view(batch, -1), K
+    )
+    clses = (topk_ind // K).int()
 
-    offset = _transpose_and_gather_feat(offset_e, topk_ind)  # B,K,2
-    size = _transpose_and_gather_feat(size_e, topk_ind)  # B,K,3
-    if rz_e is not None:
-        rz = _transpose_and_gather_feat(rz_e, topk_ind)
-        rz = torch.stack([get_alpha(r) for r in rz])
-    else:
-        rz = torch.zeros_like(scores)
+    # ── FIX: re-gather topk_inds to get true spatial indices ──
+    topk_inds = _gather_feat(
+        topk_inds.view(batch, -1, 1), topk_ind
+    ).view(batch, K)
 
-    ys = _gather_feat(ys.view(batch, -1, 1), topk_ind).view(batch, K)
-    xs = _gather_feat(xs.view(batch, -1, 1), topk_ind).view(batch, K)
+    offset = _transpose_and_gather_feat(offset_e, topk_inds)
 
-    xs = xs.view(batch, K, 1) + offset[:, :, 0:1]
-    ys = ys.view(batch, K, 1) + offset[:, :, 1:2]
-    xy = torch.cat((xs, ys), dim=2)  # batch,K,2
+    ys = _gather_feat(
+        ys.view(batch, -1, 1), topk_ind
+    ).view(batch, K)
+    xs = _gather_feat(
+        xs.view(batch, -1, 1), topk_ind
+    ).view(batch, K)
 
-    xs_prev = xs.view(batch, K, 1) + offset[:, :, 2:3]
-    ys_prev = ys.view(batch, K, 1) + offset[:, :, 3:4]
-    xy_prev = torch.cat((xs_prev, ys_prev), dim=2)  # batch,K,2
+    # ── FIX: save integer positions before applying sub-pixel offset ──
+    xs_int = xs.view(batch, K, 1)
+    ys_int = ys.view(batch, K, 1)
 
-    return xy.detach(), xy_prev.detach(), scores.detach(), clses.detach(), size.detach(), rz.detach()
+    xs = xs_int + offset[:, :, 0:1]
+    ys = ys_int + offset[:, :, 1:2]
+    xy = torch.cat((xs, ys), dim=2)
+
+    # ── FIX: temporal offset relative to integer position ──
+    xs_prev = xs_int + offset[:, :, 2:3]
+    ys_prev = ys_int + offset[:, :, 3:4]
+    xy_prev = torch.cat((xs_prev, ys_prev), dim=2)
+
+    return xy.detach(), xy_prev.detach(), scores.detach(), clses.detach()
 
 
 def _topk(scores, K=40):
