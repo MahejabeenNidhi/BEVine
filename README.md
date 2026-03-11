@@ -36,3 +36,14 @@ python world_track.py test     -c configs/t_fit.yml     -c configs/d_{dataset_te
 python world_track.py test     -c configs/t_fit.yml     -c configs/d_mmcows_multiseq.yml     -c configs/m_bevformer.yml     --ckpt_path lightning_logs/MmCows_Ablation_X/checkpoints/last.ckpt
 ```
 
+## MmCows Dataset 
+
+You can download the images from the original data repository for MmCows and organise them accordingly in Image_subset folders to run BEVine
+
+Our annotations on the MmCows dataset can be downloaded from [here](https://drive.google.com/drive/folders/1cwHKAYhcS3lYNl5rutRsW-CcCnqV4mDc?usp=sharing)
+
+The training weight and the refined calibration of the full BEVine model can be downloaded from [here](https://drive.google.com/drive/folders/1mw0NHEG_sX161I5D68iiTTgGZxTSnUyL?usp=sharing)
+
+## JerCCows Dataset
+
+This dataset will be made available upon manuscript acceptance and available upon reasonable request. 
