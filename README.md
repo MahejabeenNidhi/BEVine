@@ -47,3 +47,23 @@ The training weight and the refined calibration of the full BEVine model can be 
 ## JerCCows Dataset
 
 This dataset will be made available upon manuscript acceptance and available upon reasonable request. 
+
+## Acknowledgements
+
+This work is built upon the [TrackTacular](https://github.com/tteepe/TrackTacular) codebase by Teepe et al. We gratefully acknowledge their foundational work on lifting multi-view detection and tracking to the Bird's Eye View.
+
+This codebase can be tested on the [MmCows](https://github.com/neis-lab/mmcows) dataset, a multimodal dataset for dairy cattle monitoring.
+
+## Citation
+
+If you find BEVine useful for your research, please cite our work:
+
+```bibtex
+@article{nidhi2025bevine,
+  title     = {BEVine: Bird's Eye View for Multi-Camera Bovine Tracking},
+  author    = {NIDHI, Mahejabeen Hossain and Guo, Chuanyi and Lyu, Li and He, Zheng and Guo, Zhaojin and Liu, Kai and Flay, Kate Jade},
+  journal   = {SSRN},
+  year      = {2025},
+  url       = {https://ssrn.com/abstract=6463506},
+  doi       = {10.2139/ssrn.6463506}
+}
