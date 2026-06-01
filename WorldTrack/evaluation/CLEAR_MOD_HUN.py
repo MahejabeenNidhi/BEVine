@@ -26,8 +26,8 @@ def CLEAR_MOD_HUN(gt, det):
     [3]	MODA          - N-MODA
     [4]	MODP          - N-MODP
     """
-    # td = 50 / 2.5  # distance threshold
-    td = 10 # change to try 100cm threshold / 10cm per grid cell = 10 grid cells
+    td = 50 / 2.5  # distance threshold #BEVine reports its evaluation metrics with this td value (same as TrackTacular)
+    # td = 10 # change to try 100cm threshold / 10cm per grid cell = 10 grid cells
 
     F = int(max(gt[:, 0])) + 1
     N = int(max(det[:, 1])) + 1
