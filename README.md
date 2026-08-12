@@ -66,4 +66,6 @@ Our dataset is now made publicly available on [hugging face](https://huggingface
 If you find BEVine useful for your research, please cite our work:
 
 ```bibtex
-Nidhi, M.H., Guo, C., Lyu, L., He, Z., Guo, Z., Liu, K., Flay, K.J., 2026. Early Fusion Multi-View Aggregation for Multi-Camera Cattle Tracking. Smart Agricultural Technology 102473. https://doi.org/10.1016/j.atech.2026.102473
+Nidhi, M.H., Guo, C., Lyu, L., He, Z., Guo, Z., Liu, K., Flay, K.J., 2026.
+Early Fusion Multi-View Aggregation for Multi-Camera Cattle Tracking.
+Smart Agricultural Technology 102473. https://doi.org/10.1016/j.atech.2026.102473
