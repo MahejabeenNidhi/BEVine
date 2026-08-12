@@ -1,5 +1,7 @@
 # BEVine
 
+Official code repository for our accepted paper in Smart Agriculture Technology "Early Fusion Multi-View Aggregation for Multi-Camera Cattle Tracking"
+
 ## Abstract 
 
 Intensive dairy farming operations require automated monitoring solutions to efficiently manage large herds across expansive areas. However, existing approaches face significant limitations. Single-camera systems provide insufficient coverage due to blind spots and reduced spatial resolution at greater distances, while current multi-camera tracking methods depend on detecting animals in individual views before cross-camera association, and are often restricted to specific barns or breeds. We introduce BEVine (bird's eye view for bovine tracking), a novel open-source multi-camera tracking framework that performs early multi-view aggregation by detecting animals directly in a unified bird's eye view (BEV) representation, rather than associating detections across separate camera views. Our practical visual localisation pipeline generates BEV ground-truth positions from time-synchronised multi-camera footage, supported by a web-based user interface for annotation refinement. We introduce a multi-sequence training protocol that prevents scene-specific overfitting of the temporal BEV feature cache, and two complementary architectural extensions: per-camera image auxiliary supervision providing explicit foot-point and bounding box geometry, and a differentiable calibration refinement module that learns per-camera extrinsic corrections end-to-end. We demonstrate robust performance across two distinct farm datasets with varying camera configurations and cattle breeds: our JerCCows dataset (8 cameras, Jersey cattle) and the publicly available MmCows dataset (4 cameras, Holstein cattle), achieving multi-object tracking accuracies of 84.6% and 85.7%, respectively. These results establish early fusion BEV tracking as a viable and scalable solution for precision livestock farming across diverse agricultural settings. The code is available at https://github.com/MahejabeenNidhi/BEVine
@@ -57,16 +59,11 @@ This work is built upon the [TrackTacular](https://github.com/tteepe/TrackTacula
 
 This codebase can be tested on the [MmCows](https://github.com/neis-lab/mmcows) dataset, a multimodal dataset for dairy cattle monitoring.
 
+Our dataset is now made publicly available on [hugging face](https://huggingface.co/datasets/MaeNidhi/JerCCows)
+
 ## Citation
 
 If you find BEVine useful for your research, please cite our work:
 
 ```bibtex
-@article{nidhi2025bevine,
-  title     = {BEVine: Bird's Eye View for Multi-Camera Bovine Tracking},
-  author    = {NIDHI, Mahejabeen Hossain and Guo, Chuanyi and Lyu, Li and He, Zheng and Guo, Zhaojin and Liu, Kai and Flay, Kate Jade},
-  journal   = {SSRN},
-  year      = {2025},
-  url       = {https://ssrn.com/abstract=6463506},
-  doi       = {10.2139/ssrn.6463506}
-}
+Nidhi, M.H., Guo, C., Lyu, L., He, Z., Guo, Z., Liu, K., Flay, K.J., 2026. Early Fusion Multi-View Aggregation for Multi-Camera Cattle Tracking. Smart Agricultural Technology 102473. https://doi.org/10.1016/j.atech.2026.102473
