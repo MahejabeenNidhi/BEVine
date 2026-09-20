@@ -1,10 +1,29 @@
-# BEVine
+# BEVine3D
 
-Official code repository for our accepted paper in Smart Agriculture Technology "Early Fusion Multi-View Aggregation for Multi-Camera Cattle Tracking"
+Introducing 3D bounding box integration
 
-## Abstract 
+## Usage
 
-Intensive dairy farming operations require automated monitoring solutions to efficiently manage large herds across expansive areas. However, existing approaches face significant limitations. Single-camera systems provide insufficient coverage due to blind spots and reduced spatial resolution at greater distances, while current multi-camera tracking methods depend on detecting animals in individual views before cross-camera association, and are often restricted to specific barns or breeds. We introduce BEVine (bird's eye view for bovine tracking), a novel open-source multi-camera tracking framework that performs early multi-view aggregation by detecting animals directly in a unified bird's eye view (BEV) representation, rather than associating detections across separate camera views. Our practical visual localisation pipeline generates BEV ground-truth positions from time-synchronised multi-camera footage, supported by a web-based user interface for annotation refinement. We introduce a multi-sequence training protocol that prevents scene-specific overfitting of the temporal BEV feature cache, and two complementary architectural extensions: per-camera image auxiliary supervision providing explicit foot-point and bounding box geometry, and a differentiable calibration refinement module that learns per-camera extrinsic corrections end-to-end. We demonstrate robust performance across two distinct farm datasets with varying camera configurations and cattle breeds: our JerCCows dataset (8 cameras, Jersey cattle) and the publicly available MmCows dataset (4 cameras, Holstein cattle), achieving multi-object tracking accuracies of 84.6% and 85.7%, respectively. These results establish early fusion BEV tracking as a viable and scalable solution for precision livestock farming across diverse agricultural settings. The code is available at https://github.com/MahejabeenNidhi/BEVine
+### Training
+```
+python world_track.py fit \
+  --config configs/t_fit.yml \
+  --config configs/m_bevformer.yml \
+  --config configs/d_mmcows_multiseq.yml \
+  --data.init_args.annotation_mode 3d \
+  --model.swin_pretrained_path "/path/to/exported_last.pt" \
+```
+### Testing
+```
+python world_track.py test \
+  --config configs/t_fit.yml \
+  --config configs/m_bevformer.yml \
+  --config configs/d_mmcows_multiseq.yml \
+  --ckpt_path /path/to/last.ckpt \
+  --data.init_args.annotation_mode 3d \
+  --model.swin_pretrained_path "/path/to/exported_last.pt" \
+```
+To switch between 2d and 3d training, change the annotation_mode
 
 ## Dataset annotation
 
@@ -32,39 +51,6 @@ Once the images are annotated, we can use the WorldTrack/localisation_tools/visu
 The JSON output files from using the visual_localization.py script that be further modified using our web-based annotation tool BEVineAnnotationTool.html which will work on a browser (only tested on Google Chrome). 
 
 [![Watch the video](https://img.youtube.com/vi/D_FNVcT1D2U/maxresdefault.jpg)](https://youtu.be/D_FNVcT1D2U)
-
-
-## How to train 
-
-```
-python world_track.py fit   -c configs/t_fit.yml   -c configs/d_{dataset_config}.yml   -c configs/m_bevformer.yml
-
-# Example: training mmcows (we have only developed and tested BEVine on BEVFormer)
-
-python world_track.py fit   -c configs/t_fit.yml   -c configs/d_mmcows_multiseq.yml   -c configs/m_bevformer.yml
-```
-
-## How to test 
-
-```
-python world_track.py test     -c configs/t_fit.yml     -c configs/d_{dataset_test}.yml     -c configs/m_bevformer.yml     --ckpt path/to/checkpoint/last.ckpt
-
-# Example
-
-python world_track.py test     -c configs/t_fit.yml     -c configs/d_mmcows_multiseq.yml     -c configs/m_bevformer.yml     --ckpt_path lightning_logs/MmCows_Ablation_X/checkpoints/last.ckpt
-```
-
-## MmCows Dataset 
-
-You can download the images from the original data repository for MmCows and organise them accordingly in Image_subset folders to run BEVine
-
-Our annotations on the MmCows dataset can be downloaded from [here](https://drive.google.com/drive/folders/1cwHKAYhcS3lYNl5rutRsW-CcCnqV4mDc?usp=sharing)
-
-The training weight and the refined calibration of the full BEVine model can be downloaded from [here](https://drive.google.com/drive/folders/1mw0NHEG_sX161I5D68iiTTgGZxTSnUyL?usp=sharing)
-
-## JerCCows Dataset
-
-This dataset will be made available upon manuscript acceptance and available upon reasonable request. 
 
 ## Acknowledgements
 
