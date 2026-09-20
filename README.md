@@ -8,7 +8,20 @@ Intensive dairy farming operations require automated monitoring solutions to eff
 
 ## Dataset annotation
 
-### How to annotate your own dataset
+### How to annotate your own 3D dataset
+
+You can now annotate your own 3D bounding boxes on multi-camera systems
+
+```
+python annotate3d.py --dataset /path/to/mmcows_images \
+    --calibration_json output_barn_multi/camera_calibration.json \
+    --floorplan_json output_barn_multi/floorplan.json \
+    --review_dir output_annotations/mmcows
+```
+<img width="5809" height="2729" alt="Figure1" src="https://github.com/user-attachments/assets/902d3827-ad64-454b-81d3-b5fc7badf981" />
+
+
+### How to annotate your own 2D dataset
 
 Our dataset contains time-synchronised images from eight cameras. 
 
