@@ -111,6 +111,32 @@ def center_distance(atracks, btracks):
     return cost_matrix
 
 
+def box_iou_cost(track_boxes, det_boxes):
+    """(T, D) cost matrix = 1 - rotated BEV IoU.
+
+    track_boxes / det_boxes : lists of (cx, cy, length, width, yaw) in
+    BEV CELLS, or None per entry. Pairs where either side has no box get
+    cost 1.0 (no overlap information -> neutral under a weighted sum).
+
+    The obb_iou import is lazy (same pattern as utils/decode.py) so this
+    module never hard-depends on evaluation/ at import time.
+    """
+    T, D = len(track_boxes), len(det_boxes)
+    cost = np.ones((T, D), dtype=np.float64)
+    ti = [i for i, b in enumerate(track_boxes) if b is not None]
+    dj = [j for j, b in enumerate(det_boxes) if b is not None]
+    if not ti or not dj:
+        return cost
+    from evaluation.obb_iou import obb_iou_matrix
+    A = np.asarray([track_boxes[i] for i in ti], dtype=np.float64)
+    B = np.asarray([det_boxes[j] for j in dj], dtype=np.float64)
+    M = obb_iou_matrix(A, B, prefilter=True)          # (len(ti), len(dj))
+    for a, i in enumerate(ti):
+        for b_, j in enumerate(dj):
+            cost[i, j] = 1.0 - float(M[a, b_])
+    return cost
+
+
 def embedding_distance(tracks, detections, metric='cosine'):
     """
     :param tracks: list[STrack]
