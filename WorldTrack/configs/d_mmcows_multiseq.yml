@@ -5,49 +5,124 @@
 data:
   class_path: datasets.PedestrianDataModule
   init_args:
-    data_dir:
-      "/path/to/data"
+    data_dir: "/home/mae/BEVine3D/WorldTrack/mmCows_data"
     multi_seq: true
-    manifest_name: "sequences_mmCows_all.json"
+    manifest_name: "sequences_mmcows_complete.json"
+    # Centre convention for the BEV heat-map AND for grid_gt (point MODA).
+    # true  -> 3D centroid (needs 3D_annotations/ or centers_3d.json)
+    # false -> positionID annotation point (~35 cm off the body centre)
+    # Keep this value IDENTICAL for the 3D and the 2D-only run.
+    center_from_3d: true
+    # '3d'        -> full 3D supervision + OBB evaluation
+    # '2d'        -> 3D_annotations/ IGNORED, but centers_3d.json still used
+    #                => BEV/point GT bit-identical to the 3D run
+    # '2d_strict' -> no 3D at all; centres from positionID (legacy baseline)
+    annotation_mode: "3d"
+    # stationary-frame filtering (train split only)
+    # Drops frames where NO cow moved > stationary_min_disp_cm vs the
+    # previous frame. A single slightly-moving cow keeps the frame.
+    drop_stationary: true
+    stationary_min_disp_cm: 5.0   # measured on metric 3D centres (sub-cm)
+    stationary_keep_prob: 0.1     # retain ~10% of all-stationary frames
+    stationary_max_run: 5         # never drop >5 in a row (@1 fps = 5 s)
 model:
   resolution: [117, 4, 192]
   bounds: [0, 192, 0, 117, 0, 200]
+#  5 cm high-resolution experiment (needs grid_cell_size=5 in mmcows_dataset.py)
+#  resolution: [ 235, 4, 384 ]
+#  bounds: [ 0, 384, 0, 235, 0, 200 ]
   depth: [32, 50, 5000]
   num_cameras: 4
   use_temporal_cache: True
-  # ── image auxiliary loss (training-time) ──
+  # image auxiliary loss (training-time)
   use_image_aux_loss: false
   img_aux_weight: 1.0
-  # ── 2D per-camera tracking (test-time) ──
-  use_2d_tracking: false
-  yolo_weights_path: "/path/to/weights/best.pt"
-  tau_score: 0.3
-  tau_match: 100.0
-  original_img_hw: [2800, 4480]
-  # ── 2D matching geometry ──
-  use_foot_point: true
-  adaptive_tau: true
-  tau_floor: 50.0
-  tau_fraction: 0.15
-  cost_gate_factor: 3.0
-  projection_margin: 0.02
-  # ── calibration refinement ──
-  learn_calibration: true
-  cal_refine_reg_weight: 1.0e-4
+  # auxiliary 3D-loss containment
+  aux3d_weight: 0.25
+  aux3d_warmup_steps: 0.25
+  aux3d_logvar_min: -1.0            # caps the aux weight at e^1 = 2.72
+  aux3d_logvar_max: 3.0             # (was effectively 16.6 at epoch 29)
+  yaw_mag_weight: 0.1
+  size_prior_weight: 0.01
+  # calibration refinement
+  learn_calibration: false
+  cal_refine_reg_weight: 1.0e-2
   lr_calib_scale: 0.1
   reproj_camera_weighting: proportional
-  # I2: mild gate (or 0 — all cameras well observed)
+  # mild gate (or 0 — all cameras well observed)
   min_obs_per_camera: 2
   reproj_soft_gate: false
-  # I3: Cauchy kernel
+  # Cauchy kernel
   reproj_loss_type: cauchy
   reproj_robust_scale: 50.0
-  # I6: shorter warmup (MmCows converges faster)
-  calib_warmup_steps: 300
+  # shorter warmup
+  calib_warmup_steps: 0.15   # ~15% of total steps spent frozen
   calib_warmup_mode: steps
   use_reproj_loss: false
   reproj_weight: 0.1
+  # 3D-box corner reprojection
+  use_reproj3d_loss: true # multi-view consistency on yaw/size
+  reproj3d_weight: 0.2
+  reproj3d_loss_type: giou # bounded in [0,2]; cannot dominate
+  reproj3d_normalize: true
+  reproj3d_update_calib: false      # cameras must NOT move
+  reproj3d_warmup_steps: 0.30   # let size/yaw heads settle first
   calibration_dir: ""
   reset_calibration_at_test: false
+  size_scale_cm: 100.0
+  # per-object 3D attribute head (query-style)
+  attr3d_neck_dim: 128
+  attr3d_head_dim: 128
+  attr3d_points: 8               # deformable samples per object
+  attr3d_max_offset_cells: 20.0  # 2 m at 10 cm/cell; ~a full cow length
+  attr3d_detach_trunk: true      # false = let attributes shape the trunk
+  # evaluation thresholds
+  conf_threshold: 0.32       # raise back to 0.5 after full training
+  eval_match_dist_cm: 50.0
+  # BEV duplicate suppression
+  # 1 BEV cell = 10 cm here (grid_cell_size=10, bounds X 0..192
+  # over X=192 cells). A cow is ~190 x 75 cm (~19 x 8 cells).
+  nms_score_threshold: 0.05         # decouple NMS from conf_threshold
+  nms_kernel: 11        # local max over +/-5 cells = +/-50 cm
+  nms_radius_cm: 0.0    # let IoU do the duplicate work
+  nms_iou: 0.3          # rotated-BEV-IoU NMS inside decode
+  obb_nms_iou: 0.3      # keep the post-hoc diagnostic in sync
+  # compute pooled val MODA every 5th validation epoch (1 = every epoch,
+  # 0 = disable and fall back to a constant 0.0)
+  val_moda_interval: 1
+  val_conf_sweep: true
+  val_moda_gate_cells: 40.0
+  track_assoc_dist_cm: 200.0
+  track_dup_dist_cm: 60.0
+  track_buffer: 5
+
+  track_lying_velocity_freeze: true
+  # 3D-AWARE TRACKING (test time)
+  # ABLATION: set track_use_3d_attrs false to reproduce the old
+  # memory-less per-frame yaw/size/posture sampling exactly.
+  track_use_3d_attrs: true
+  track_size_mode: median         # 'mean' is optimal for a CONSTANT quantity; 'median' is robust to occluded single-frame reads
+  track_size_alpha: 0.3         # only used when track_size_mode: ema
+  track_size_median_window: 15  # only used when track_size_mode: median
+  track_size_reject_cm: 200.0    # ignore a single reading >200 cm off. The images are at 1 frame per second allowing the cow to travel more between frames
+  track_yaw_mode: kf            # 'ema' | 'kf' -> (theta, yaw_rate)
+  track_yaw_alpha: 0.3
+  track_yaw_flip_align: true    # a rotated box is invariant to yaw+pi
+  track_writeback_to_detections: true
+  track_yaw_q: 0.04
+  track_yaw_r: 0.25
+  track_posture_alpha: 0.3
+  track_posture_hysteresis: 0.1
+
+  # TRACK-CONSISTENCY LOSS (train time)
+  use_track_attr_consistency: true
+  track_attr_consistency_weight: 0.05   # size self-consistency
+  track_yaw_consistency_weight: 0.02    # heading (raise to ~0.02 to enable)
+  track_assoc_use_iou: true        # false = legacy distance-only arm
+  track_assoc_iou_weight: 0.25
+  track_attr_bank_alpha: 0.3
+  track_attr_bank_max_gap: 3            # frames
+  track_attr_consistency_warmup_steps: 0.30
 trainer:
   max_epochs: 60
+  precision: bf16-mixed

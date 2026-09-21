@@ -13,8 +13,8 @@ trainer:
         logging_interval: step
     - class_path: ModelCheckpoint
       init_args:
-        monitor: val_center
-        mode: min
+        monitor: val_moda
+        mode: max
         save_last: true
-        save_top_k: 5
-        filename: "model-{epoch:02d}-{val_loss:.2f}-{val_center:.2f}"
+        save_top_k: 3
+        filename: "model-e{epoch:02d}-moda{val_moda:.2f}-ap{val_ap:.2f}-c{val_best_conf:.2f}"

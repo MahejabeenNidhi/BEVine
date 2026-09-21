@@ -1,2 +1,11 @@
 model:
   model_name: bevformer
+  encoder_name: swin_t
+  # ── Swin-T backbone toggle ──────────────────────────────────
+  # ""  -> BASELINE: torchvision swin_t, ImageNet weights (current
+  #        default behaviour — bit-identical to before this change).
+  # swin_pretrained_path: ""
+  # non-empty -> CUSTOM: load YOUR lightly_train-pretrained Swin-T
+  #        backbone (.pt export or .ckpt Lightning checkpoint).
+  swin_pretrained_path: "/home/mae/BEVine3D/WorldTrack/swin_pretrain/exported_models/exported_last.pt"
+  swin_freeze_backbone: false
