@@ -4,9 +4,23 @@ from PIL import Image
 
 EPS = 1e-6
 
+# ── 3D target normalisation ───────────────────────────────────────
+# mmCows 3D boxes are annotated in CENTIMETRES (length 180-220 cm).
+# Regressing raw cm makes the size loss ~400 while the 2D losses are
+# ~1-20, which (a) dominates the global gradient norm used by
+# trainer.gradient_clip_val and (b) needs ~1e5 Adam steps just to move
+# the head bias to the mean.  The head therefore regresses METRES.
+SIZE_SCALE_CM = 100.0
+
+# Mean animal dimensions in METRES (length, width, height) used to
+# initialise the size-head bias so the initial size loss is ~0.1.
+SIZE_PRIOR_M = (1.90, 0.75, 1.15)
+
 
 def sigmoid(x):
-    return torch.clamp(torch.sigmoid(x), min=1e-4, max=1 - 1e-4)
+    """Numerically-safe sigmoid + clamp.
+    """
+    return torch.clamp(torch.sigmoid(x.float()), min=1e-4, max=1 - 1e-4)
 
 
 def matmul2(mat1, mat2):
@@ -192,4 +206,31 @@ def draw_umich_gaussian(heatmap, center, sigma, k=1):
     masked_gaussian = gaussian[radius - top:radius + bottom, radius - left:radius + right]
     if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0:
         torch.maximum(masked_heatmap, masked_gaussian * k, out=masked_heatmap)
+    return heatmap
+
+def draw_oriented_gaussian(heatmap, center, sigma_l, sigma_w, yaw, k=1):
+    """Anisotropic Gaussian aligned with an oriented 3D box footprint.
+
+    sigma_l / sigma_w are in BEV cells (along the box length / width),
+    yaw in radians (world frame; valid because the train-time BEV
+    augmentation is translation-only). Peak value is exactly 1 at
+    `center` so FocalLoss pos_inds semantics are unchanged.
+    """
+    radius = int(np.ceil(3.0 * max(float(sigma_l), float(sigma_w))))
+    x, y = int(center[0]), int(center[1])
+    H, W = heatmap.shape
+    x0, x1 = max(x - radius, 0), min(x + radius + 1, W)
+    y0, y1 = max(y - radius, 0), min(y + radius + 1, H)
+    if x0 >= x1 or y0 >= y1:
+        return heatmap
+    ys = torch.arange(y0, y1, dtype=torch.float32).view(-1, 1) - float(y)
+    xs = torch.arange(x0, x1, dtype=torch.float32).view(1, -1) - float(x)
+    c, s = float(np.cos(yaw)), float(np.sin(yaw))
+    u = c * xs + s * ys        # along length
+    v = -s * xs + c * ys       # along width
+    g = torch.exp(-(u * u) / (2.0 * float(sigma_l) ** 2)
+                  - (v * v) / (2.0 * float(sigma_w) ** 2))
+    g[g < torch.finfo(torch.float32).eps * g.max()] = 0
+    masked = heatmap[y0:y1, x0:x1]
+    torch.maximum(masked, g * k, out=masked)
     return heatmap

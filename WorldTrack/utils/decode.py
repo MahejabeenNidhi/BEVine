@@ -1,15 +1,77 @@
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def _nms(heat, kernel=3):
+    """Local-maximum suppression on a heat-map.
+    """
+    if kernel is None or int(kernel) <= 1:
+        return heat
+    kernel = int(kernel)
+    if kernel % 2 == 0:                 # force odd -> centred window
+        kernel += 1
     pad = (kernel - 1) // 2
-
-    hmax = nn.functional.max_pool2d(
-        heat, (kernel, kernel), stride=1, padding=pad)
-    keep = (hmax == heat).float()
+    # fp32 for the pooling: max_pool2d_with_indices is not guaranteed
+    # for bf16 under bf16-mixed precision.
+    hmax, hidx = F.max_pool2d(
+        heat.float(), (kernel, kernel), stride=1, padding=pad,
+        return_indices=True)
+    b, c, h, w = heat.shape
+    flat = torch.arange(h * w, device=heat.device).view(1, 1, h, w)
+    keep = (hidx == flat).to(heat.dtype)
     return heat * keep
 
+def _bev_nms_mask(xy, scores, radius=0.0, boxes=None, iou_thresh=0.0,
+                  score_thresh=0.0):
+    """Greedy NMS over the Top-K decoded peaks of ONE batch element.
+
+    xy      : (K, 2) BEV *memory* coords (sub-pixel)
+    scores  : (K,)
+    boxes   : (K, 5) = (cx, cy, length, width, yaw) in BEV CELLS, or None
+    radius  : centre-distance gate, in BEV CELLS (0 = off)
+    iou_thresh : rotated-BEV-IoU gate (0 = off, needs `boxes`)
+
+    Returns a (K,) bool tensor: True = SUPPRESSED (duplicate).
+    Only peaks with score > score_thresh take part, so this costs
+    nothing while the heat-map is still cold.
+    """
+    K = int(scores.shape[0])
+    suppressed = np.zeros(K, dtype=bool)
+    if K == 0 or (radius <= 0 and iou_thresh <= 0):
+        return torch.from_numpy(suppressed).to(scores.device)
+
+    s = scores.detach().float().cpu().numpy().reshape(K)
+    p = xy.detach().float().cpu().numpy().reshape(K, 2)
+
+    bx, iou_mat = None, None
+    if boxes is not None and iou_thresh > 0:
+        try:
+            from evaluation.obb_iou import obb_iou_matrix as iou_mat
+            bx = boxes.detach().float().cpu().numpy().reshape(K, 5)
+        except Exception:               # never break decoding
+            bx, iou_mat = None, None
+
+    order = np.argsort(-s)
+    order = order[s[order] > score_thresh]
+    r2 = float(radius) ** 2
+
+    for pos, i in enumerate(order):
+        if suppressed[i]:
+            continue                    # a killed peak may not kill others
+        rest = order[pos + 1:]
+        rest = rest[~suppressed[rest]]  # only LOWER-scoring survivors
+        if rest.size == 0:
+            break
+        kill = np.zeros(rest.shape[0], dtype=bool)
+        if radius > 0:
+            kill |= ((p[rest] - p[i]) ** 2).sum(1) < r2
+        if bx is not None:
+            kill |= (iou_mat(bx[i:i + 1], bx[rest], prefilter=True)[0] >= iou_thresh)
+        suppressed[rest[kill]] = True
+
+    return torch.from_numpy(suppressed).to(scores.device)
 
 def get_box_from_corners(corners):
     """"
@@ -35,18 +97,51 @@ def get_alpha(rot):
     return alpha1 * idx + alpha2 * (1 - idx)
 
 
-def decoder(center_e, offset_e, size_e, rz_e=None, K=60):
+def decoder(center_e, offset_e, size_e=None, K=60,
+            attr_fn=None,
+            size_scale=100.0,          # vestigial: attr_fn scales itself
+            nms_kernel=3, nms_radius=0.0, nms_iou=0.0,
+            nms_cell_size_cm=None, nms_score_threshold=0.0):
     """
-    center_e: B,1,H,W
-    offset_e: B,4,H,W  (channels 0-1: sub-pixel, channels 2-3: temporal)
+    center_e: B,1,H,W (post-sigmoid scores)
+    offset_e: B,4,H,W (channels 0-1: sub-pixel, channels 2-3: temporal)
+
+    Per-object 3D attributes (NEW):
+        attr_fn : callable or None. Receives the decoded SUB-PIXEL peak
+                  positions xy (B,K,2) in BEV memory coords and returns a
+                  dict with keys
+                      'yaw_sincos'    (B,K,2)
+                      'yaw_angle'     (B,K)
+                      'dimensions'    (B,K,3) CENTIMETRES
+                      'posture_prob'  (B,K)
+                      'posture_class' (B,K)
+                  -- exactly what Attr3DQueryHead.query_extra() produces.
+                  Attributes are evaluated ONCE per decoded peak
+                  (per-object), not per pixel.
+
+    Duplicate suppression (unchanged semantics):
+        nms_kernel / nms_radius / nms_iou / nms_cell_size_cm /
+        nms_score_threshold as before. The IoU gate now consumes the
+        per-peak attributes from attr_fn instead of dense maps.
+
+    Suppressed peaks are NOT removed (tensor shapes stay B,K) -- their
+    score is set to 0.0, so every existing `score > conf_threshold`
+    filter downstream drops them automatically.
+
+    Returns
+    -------
+    (xy, xy_prev, scores, clses)          if attr_fn is None
+    (xy, xy_prev, scores, clses, extra)   otherwise
     """
     batch, cat, height, width = center_e.size()
-    center_e = _nms(center_e)
+
+    center_e = _nms(center_e, kernel=nms_kernel)
 
     topk_scores, topk_inds = torch.topk(
         center_e.view(batch, cat, -1), K
     )
     topk_inds = topk_inds % (height * width)
+
     ys = (topk_inds // width).float()
     xs = (topk_inds % width).float()
 
@@ -55,21 +150,15 @@ def decoder(center_e, offset_e, size_e, rz_e=None, K=60):
     )
     clses = (topk_ind // K).int()
 
-    # ── FIX: re-gather topk_inds to get true spatial indices ──
+    # ── re-gather topk_inds to get true spatial indices ──
     topk_inds = _gather_feat(
         topk_inds.view(batch, -1, 1), topk_ind
     ).view(batch, K)
 
     offset = _transpose_and_gather_feat(offset_e, topk_inds)
+    ys = _gather_feat(ys.view(batch, -1, 1), topk_ind).view(batch, K)
+    xs = _gather_feat(xs.view(batch, -1, 1), topk_ind).view(batch, K)
 
-    ys = _gather_feat(
-        ys.view(batch, -1, 1), topk_ind
-    ).view(batch, K)
-    xs = _gather_feat(
-        xs.view(batch, -1, 1), topk_ind
-    ).view(batch, K)
-
-    # ── FIX: save integer positions before applying sub-pixel offset ──
     xs_int = xs.view(batch, K, 1)
     ys_int = ys.view(batch, K, 1)
 
@@ -77,11 +166,45 @@ def decoder(center_e, offset_e, size_e, rz_e=None, K=60):
     ys = ys_int + offset[:, :, 1:2]
     xy = torch.cat((xs, ys), dim=2)
 
-    # ── FIX: temporal offset relative to integer position ──
     xs_prev = xs_int + offset[:, :, 2:3]
     ys_prev = ys_int + offset[:, :, 3:4]
     xy_prev = torch.cat((xs_prev, ys_prev), dim=2)
 
+    # per-object 3D attributes at the decoded peaks
+    # xy already includes the predicted sub-pixel offset, i.e. it is the
+    # SAME (sub-pixel) construct the query head is trained on at GT
+    # centres -- no integer-cell rounding anywhere.
+    extra = {}
+    if attr_fn is not None:
+        with torch.no_grad():
+            extra = {k: v.detach() for k, v in attr_fn(xy).items()}
+
+    # second-stage NMS over the surviving Top-K peaks
+    if (nms_radius and nms_radius > 0) or (nms_iou and nms_iou > 0):
+        boxes = None
+        if (nms_iou and nms_iou > 0 and nms_cell_size_cm
+                and 'dimensions' in extra and 'yaw_angle' in extra):
+            cell = float(nms_cell_size_cm)
+            boxes = torch.stack((
+                xy[..., 0], xy[..., 1],
+                extra['dimensions'][..., 0] / cell,   # length -> cells
+                extra['dimensions'][..., 1] / cell,   # width  -> cells
+                extra['yaw_angle'],
+            ), dim=-1)                                             # B,K,5
+        scores = scores.detach().clone()
+        for b in range(batch):
+            dup = _bev_nms_mask(
+                xy[b], scores[b],
+                radius=float(nms_radius or 0.0),
+                boxes=None if boxes is None else boxes[b],
+                iou_thresh=float(nms_iou or 0.0),
+                score_thresh=float(nms_score_threshold or 0.0),
+            )
+            scores[b] = scores[b].masked_fill(dup, 0.0)
+
+    if extra:
+        return (xy.detach(), xy_prev.detach(), scores.detach(),
+                clses.detach(), extra)
     return xy.detach(), xy_prev.detach(), scores.detach(), clses.detach()
 
 
