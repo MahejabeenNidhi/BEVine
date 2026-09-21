@@ -649,12 +649,72 @@
                             </div>
                         </div>
 
+                        <!-- Stationary Cluster Settings -->
+                        <div style="margin-top: 15px;">
+                            <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #aaa;">Stationary Cluster Settings</label>
+
+                            <div class="input-group">
+                                <label>Distance threshold (cm) — seed/inlier radius</label>
+                                <div class="input-button-combo">
+                                    <input type="number" id="cluster-threshold" min="1" step="1"
+                                           placeholder="auto" oninput="app.checkClusterThresholdWarning()">
+                                    <button class="secondary" onclick="app.suggestClusterThreshold(true); app.suggestClusterRadius(true);">Auto</button>
+                                </div>
+                                <div id="cluster-threshold-hint"
+                                     style="font-size: 10px; color: #777; margin-top: 4px; font-family: 'Courier New', monospace;"></div>
+                                <div id="cluster-threshold-warning"
+                                     style="display: none; font-size: 10px; color: #FFD700; border: 1px solid #FFD700;
+                                            border-radius: 3px; padding: 5px; margin-top: 5px;"></div>
+                            </div>
+
+                            <div class="input-group">
+                                <label>Max cluster radius (cm) — how wide one blob may be</label>
+                                <div class="input-button-combo">
+                                    <input type="number" id="cluster-radius" min="1" step="1" placeholder="auto">
+                                    <button class="secondary" onclick="app.suggestClusterRadius(true)">Auto</button>
+                                </div>
+                                <div id="cluster-radius-hint"
+                                     style="font-size: 10px; color: #777; margin-top: 4px; font-family: 'Courier New', monospace;"></div>
+                            </div>
+
+                            <div class="input-group">
+                                <label>Min cluster length (frames)</label>
+                                <input type="number" id="cluster-min-length" value="15" min="2" step="1">
+                            </div>
+
+                            <div class="input-group">
+                                <label>Outlier tolerance (frames)</label>
+                                <input type="number" id="cluster-tolerance" value="2" min="0" step="1">
+                            </div>
+                        </div>
+
                         <!-- Trajectory Tools -->
                         <div style="margin-top: 15px;">
                             <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #aaa;">Trajectory Tools</label>
                             <div class="button-group">
                                 <button onclick="app.fillTrajectoryGaps()" class="secondary">Fill Gaps</button>
                                 <button onclick="app.smoothTrajectory()" class="secondary">Smooth Path</button>
+                            </div>
+                            <div class="button-group">
+                                <button onclick="app.mergeStationaryClusters()" class="secondary"
+                                        style="width: 100%;">🧲 Merge Stationary Clusters</button>
+                            </div>
+
+                            <!-- Cluster preview / confirmation -->
+                            <div id="cluster-preview-panel"
+                                 style="display: none; margin-top: 10px; background: #1a1a1a;
+                                        border: 1px solid #FF9800; border-radius: 4px; padding: 8px;">
+                                <div id="cluster-preview-summary"
+                                     style="font-size: 11px; color: #FFB74D; margin-bottom: 6px;"></div>
+                                <div id="cluster-preview-list"
+                                     style="max-height: 160px; overflow-y: auto; font-size: 11px;
+                                            font-family: 'Courier New', monospace; color: #ccc;"></div>
+                                <div id="cluster-preview-warning"
+                                     style="font-size: 10px; color: #FFD700; margin-top: 6px;"></div>
+                                <div class="button-group" style="margin-top: 8px;">
+                                    <button onclick="app.applyClusterPreview()">✓ Apply Merge</button>
+                                    <button class="danger" onclick="app.cancelClusterPreview()">✕ Cancel</button>
+                                </div>
                             </div>
                             <div class="button-group">
                                 <button onclick="app.detectTrajectoryIssues()">Detect Issues</button>
@@ -802,6 +862,23 @@
             this.trajectoryIssues = [];
             this.currentGapIndex = 0;
             this.isDraggingTrajectoryPoint = false;
+
+            // Jump-detection threshold used by detectTrajectoryIssues() (cm)
+            this.jumpThreshold = 100;
+            // Pending (unconfirmed) stationary-cluster detection result, used for canvas preview
+            this.clusterPreview = null;
+            // Remember what we auto-suggested so a reload can refresh it without
+            // clobbering a value the user typed by hand
+            this.lastSuggestedThreshold = null;
+            this.lastSuggestedRadius = null;
+            // Stationary-cluster tunables
+            this.clusterOptions = {
+                jitterWindow: 7,        // +/- frames used to measure local deviation
+                thresholdFactor: 1.75,  // threshold = 1.75x measured jitter (the 1.5-2x rule)
+                radiusFactor: 3.0,      // default max cluster radius = 3x threshold
+                radiusPercentile: 0.90, // "radius" = p90 distance from median (spike-tolerant)
+                driftFactor: 0.5        // driftLimit = max(threshold, 0.5 * maxRadius)
+            };
 
             // Add cow mode
             this.addMode = false;
@@ -1106,6 +1183,9 @@
             const showLabels = document.getElementById('show-trajectory-labels').checked;
             const highlightGaps = document.getElementById('highlight-gaps').checked;
 
+            // Draw stationary-cluster preview underneath the path/markers
+            this.drawClusterPreview();
+
             if (showLine && positions.length > 1) {
                 this.ctx.beginPath();
 
@@ -1226,6 +1306,12 @@
             const rect = this.canvas.getBoundingClientRect();
             const mouseX = e.clientX - rect.left;
             const mouseY = e.clientY - rect.top;
+
+            // While a merge preview is up, clicking a cluster point toggles it
+            // out of / back into the merge instead of dragging/selecting.
+            if (this.clusterPreview && this.handleClusterPreviewClick(mouseX, mouseY)) {
+                return;
+            }
 
             if (this.trajectoryMode && this.trajectoryData) {
                 const currentPos = this.trajectoryData.positions.find(p => p.frameIndex === this.currentFrameIndex);
@@ -1905,6 +1991,9 @@
 
             this.currentGapIndex = 0;
             this.selectedCowId = cowId;
+            this.cancelClusterPreview(true);     // any pending preview is stale now
+            this.suggestClusterThreshold();      // re-suggest unless the user customised it
+            this.suggestClusterRadius();
             this.updateTrajectoryInfo();
             this.detectTrajectoryIssues();
             this.drawTimeline();
@@ -1918,6 +2007,7 @@
             this.trajectoryData = null;
             this.trajectoryIssues = [];
             this.currentGapIndex = 0;
+            this.cancelClusterPreview(true);
             document.getElementById('trajectory-info').style.display = 'none';
             document.getElementById('missing-frames-container').style.display = 'none';
             document.getElementById('issues-container').style.display = 'none';
@@ -2044,7 +2134,7 @@
 
             this.trajectoryIssues = [];
             const { positions, cowId } = this.trajectoryData;
-            const jumpThreshold = 100;
+            const jumpThreshold = this.jumpThreshold; // still independent of the cluster threshold
 
             for (let i = 1; i < positions.length; i++) {
                 const prev = positions[i - 1];
@@ -2219,6 +2309,693 @@
             this.loadTrajectory();
             this.autoSave();
             this.showMessage('Trajectory smoothed');
+        }
+
+        // ============== STATIONARY CLUSTER DETECTION & MERGE ==============
+        // Two-stage: (1) greedy over-segmentation with running-centroid + outlier
+        // tolerance, (2) agglomeration of temporally ADJACENT segments under a
+        // radius cap + drift check. Stage 2 is what stops one physical standing
+        // spot from being reported as five separate clusters.
+
+        // ---------- numeric helpers ----------
+
+        median(values) {
+            if (!values || values.length === 0) return 0;
+            const sorted = [...values].sort((a, b) => a - b);
+            const mid = Math.floor(sorted.length / 2);
+            return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+        }
+
+        percentile(values, q) {
+            if (!values || values.length === 0) return 0;
+            const s = [...values].sort((a, b) => a - b);
+            if (s.length === 1) return s[0];
+            const pos = (s.length - 1) * q;
+            const lo = Math.floor(pos), hi = Math.ceil(pos);
+            return s[lo] + (s[hi] - s[lo]) * (pos - lo);
+        }
+
+        /** Median (x,y) of a list of indices into trajectoryData.positions. */
+        medianPointOf(indices) {
+            const p = this.trajectoryData.positions;
+            return {
+                x: this.median(indices.map(i => p[i].worldX)),
+                y: this.median(indices.map(i => p[i].worldY))
+            };
+        }
+
+        distancesFrom(indices, m) {
+            const p = this.trajectoryData.positions;
+            return indices.map(i => Math.hypot(p[i].worldX - m.x, p[i].worldY - m.y));
+        }
+
+        /**
+         * Net displacement between the median of the first half of a candidate
+         * cluster and the median of its second half.
+         * Stationary blob -> ~0. Walking stretch -> ~ the length of the walk.
+         * This is the discriminator that stops a slow walk from being agglomerated
+         * into a fake "cluster" just because it fits inside the radius cap.
+         */
+        clusterDrift(indices) {
+            if (indices.length < 2) return 0;
+            const half = Math.floor(indices.length / 2);
+            const m1 = this.medianPointOf(indices.slice(0, half || 1));
+            const m2 = this.medianPointOf(indices.slice(half));
+            return Math.hypot(m1.x - m2.x, m1.y - m2.y);
+        }
+
+        // ---------- auto-suggested parameters ----------
+
+        /**
+         * Robust jitter statistics for the loaded trajectory.
+         *
+         * NOTE: median frame-to-frame step is NOT usable on its own. Positions are
+         * quantised to `cellSize` grid cells, so a standing cow produces identical
+         * positionIDs on most consecutive frames and the median step collapses to 0.
+         * Instead we measure, per frame, the distance from the median of a centred
+         * window. That is a direct estimate of local blob radius and is immune to
+         * quantisation zeros.
+         */
+        computeJitterStats() {
+            const p = this.trajectoryData ? this.trajectoryData.positions : [];
+            const n = p.length;
+            if (n < 2) return { medianStep: 0, jitter: 0, spread: 0, n };
+
+            const steps = [];
+            for (let i = 1; i < n; i++) {
+                steps.push(Math.hypot(p[i].worldX - p[i - 1].worldX, p[i].worldY - p[i - 1].worldY));
+            }
+
+            const W = this.clusterOptions.jitterWindow;
+            const devs = [];
+            for (let i = 0; i < n; i++) {
+                const a = Math.max(0, i - W), b = Math.min(n - 1, i + W);
+                const xs = [], ys = [];
+                for (let j = a; j <= b; j++) { xs.push(p[j].worldX); ys.push(p[j].worldY); }
+                const mx = this.median(xs), my = this.median(ys);
+                devs.push(Math.hypot(p[i].worldX - mx, p[i].worldY - my));
+            }
+
+            return {
+                medianStep: this.median(steps),
+                jitter: this.median(devs),           // typical local deviation = jitter scale
+                spread: this.percentile(devs, 0.9),  // extent of the widest local neighbourhoods
+                n
+            };
+        }
+
+        suggestClusterThreshold(force = false) {
+            const input = document.getElementById('cluster-threshold');
+            const hint = document.getElementById('cluster-threshold-hint');
+            if (!input) return null;
+            if (!this.trajectoryData) { if (hint) hint.textContent = ''; return null; }
+
+            const st = this.computeJitterStats();
+            const f = this.clusterOptions.thresholdFactor;
+
+            // Floor at 2 grid cells: you cannot resolve jitter finer than the grid.
+            // Cap at the jump threshold so the DEFAULT never trips its own warning.
+            const floor = Math.max(2 * this.config.cellSize, 10);
+            const raw = Math.max(st.jitter * f, st.medianStep * f, floor);
+            const suggestion = Math.max(floor, Math.min(Math.round(raw), this.jumpThreshold));
+
+            const cur = parseFloat(input.value);
+            const untouched = input.value === '' || isNaN(cur) || cur === this.lastSuggestedThreshold;
+            if (force || untouched) input.value = suggestion;
+            this.lastSuggestedThreshold = suggestion;
+
+            if (hint) {
+                hint.textContent = `jitter ${st.jitter.toFixed(1)} cm | median step ` +
+                                   `${st.medianStep.toFixed(1)} cm -> suggested ${suggestion} cm`;
+            }
+            this.checkClusterThresholdWarning();
+            return suggestion;
+        }
+
+        suggestClusterRadius(force = false) {
+            const input = document.getElementById('cluster-radius');
+            const hint = document.getElementById('cluster-radius-hint');
+            if (!input) return null;
+            if (!this.trajectoryData) { if (hint) hint.textContent = ''; return null; }
+
+            const st = this.computeJitterStats();
+            let thr = parseFloat(document.getElementById('cluster-threshold').value);
+            if (isNaN(thr) || thr <= 0) thr = this.lastSuggestedThreshold || (2 * this.config.cellSize);
+
+            const suggestion = Math.max(
+                Math.round(this.clusterOptions.radiusFactor * thr),
+                Math.round(1.5 * st.spread),
+                5 * this.config.cellSize
+            );
+
+            const cur = parseFloat(input.value);
+            const untouched = input.value === '' || isNaN(cur) || cur === this.lastSuggestedRadius;
+            if (force || untouched) input.value = suggestion;
+            this.lastSuggestedRadius = suggestion;
+
+            if (hint) {
+                hint.textContent = `local spread p90 ${st.spread.toFixed(1)} cm -> suggested ${suggestion} cm`;
+            }
+            return suggestion;
+        }
+
+        checkClusterThresholdWarning() {
+            const warnEl = document.getElementById('cluster-threshold-warning');
+            const value = parseFloat(document.getElementById('cluster-threshold').value);
+            if (!warnEl) return false;
+
+            if (!isNaN(value) && value > this.jumpThreshold) {
+                warnEl.textContent =
+                    `⚠️ Your cluster threshold (${value} cm) exceeds the jump-detection threshold ` +
+                    `(${this.jumpThreshold} cm) — clusters may absorb what would otherwise be flagged as issues.`;
+                warnEl.style.display = 'block';
+                return true;
+            }
+            warnEl.style.display = 'none';
+            return false;
+        }
+
+        // ---------- stage 1: over-segmentation ----------
+
+        /**
+         * Greedy running-centroid growth. Returns a CONTIGUOUS PARTITION of the
+         * positions array: every frame ends up in exactly one segment (frames that
+         * broke a segment reseed the next one, so nothing is dropped). Short
+         * segments are NOT discarded here — that was the old bug: dropping them
+         * before agglomeration punched holes in otherwise-mergeable blobs.
+         */
+        seedSegments(threshold, tolerance) {
+            const positions = this.trajectoryData.positions;
+            const n = positions.length;
+            const segments = [];
+            if (n === 0) return segments;
+
+            const newSeg = (startIdx, afterGap) => ({
+                indices: [startIdx],
+                sumX: positions[startIdx].worldX,
+                sumY: positions[startIdx].worldY,
+                n: 1,
+                pending: [],
+                startsAfterGap: !!afterGap
+            });
+
+            let cur = newSeg(0, false);
+            let i = 1;
+
+            while (i < n) {
+                const contiguous = positions[i].frameIndex === positions[i - 1].frameIndex + 1;
+                let broke = false;
+
+                if (!contiguous) {
+                    broke = true;                     // temporal gap: never merge across it
+                } else {
+                    const cx = cur.sumX / cur.n, cy = cur.sumY / cur.n;
+                    const d = Math.hypot(positions[i].worldX - cx, positions[i].worldY - cy);
+
+                    if (d <= threshold) {
+                        for (const pi of cur.pending) cur.indices.push(pi); // absorb tolerated spikes
+                        cur.pending = [];
+                        cur.indices.push(i);
+                        cur.sumX += positions[i].worldX;   // centroid uses inliers only
+                        cur.sumY += positions[i].worldY;
+                        cur.n++;
+                    } else {
+                        cur.pending.push(i);
+                        if (cur.pending.length > tolerance) broke = true;
+                    }
+                }
+
+                if (broke) {
+                    segments.push({ indices: cur.indices.slice(), startsAfterGap: cur.startsAfterGap });
+                    const restart = cur.pending.length ? cur.pending[0] : i;
+                    cur = newSeg(restart, !contiguous);
+                    i = restart + 1;                  // start index strictly increases -> terminates
+                    continue;
+                }
+                i++;
+            }
+
+            segments.push({ indices: cur.indices.slice(), startsAfterGap: cur.startsAfterGap });
+            if (cur.pending.length) {
+                // trailing pending frames never rejoined -> keep them so the partition stays complete
+                segments.push({ indices: cur.pending.slice(), startsAfterGap: false });
+            }
+            return segments.filter(s => s.indices.length > 0);
+        }
+
+        // ---------- stage 2: agglomeration ----------
+
+        /**
+         * Fuse temporally adjacent segments while the result still looks stationary.
+         * Only adjacent segments are considered, so a walk-away-and-return keeps its
+         * two visits separate (the walking segments in between block the fuse) — the
+         * re-entry rule holds without any extra bookkeeping.
+         */
+        agglomerateSegments(segments, threshold, maxRadius, tolerance) {
+            const q = this.clusterOptions.radiusPercentile;
+            const driftLimit = Math.max(threshold, this.clusterOptions.driftFactor * maxRadius);
+            const out = [];
+            let acc = null;
+
+            for (const seg of segments) {
+                if (!acc) { acc = { indices: seg.indices.slice() }; continue; }
+
+                if (seg.startsAfterGap) {            // hard temporal break
+                    out.push(acc);
+                    acc = { indices: seg.indices.slice() };
+                    continue;
+                }
+
+                const candidate = acc.indices.concat(seg.indices);
+                const m = this.medianPointOf(candidate);
+                const radius = this.percentile(this.distancesFrom(candidate, m), q);
+                const drift = this.clusterDrift(candidate);
+
+                // A segment no longer than the outlier tolerance is treated as an
+                // occlusion spike and is allowed to sit outside the cap; anything
+                // bigger must actually fit inside the cluster.
+                const isSpikeSized = seg.indices.length <= Math.max(1, tolerance);
+                const newcomerMax = Math.max(...this.distancesFrom(seg.indices, m));
+                const containmentOK = isSpikeSized || newcomerMax <= maxRadius;
+
+                if (radius <= maxRadius && drift <= driftLimit && containmentOK) {
+                    acc.indices = candidate;
+                } else {
+                    out.push(acc);
+                    acc = { indices: seg.indices.slice() };
+                }
+            }
+            if (acc) out.push(acc);
+            return out;
+        }
+
+        // ---------- stage 3: describe + filter ----------
+
+        describeCluster(seg, threshold, maxRadius) {
+            const positions = this.trajectoryData.positions;
+            const idx = seg.indices.slice().sort((a, b) => a - b);
+            const m = this.medianPointOf(idx);
+            const dists = this.distancesFrom(idx, m);
+
+            const outliers = [];
+            idx.forEach((i, k) => {
+                if (dists[k] > threshold) {
+                    outliers.push({
+                        index: i,
+                        frameIndex: positions[i].frameIndex,
+                        distance: dists[k],
+                        beyondRadius: dists[k] > maxRadius
+                    });
+                }
+            });
+
+            return {
+                startIndex: idx[0],
+                endIndex: idx[idx.length - 1],
+                startFrame: positions[idx[0]].frameIndex,
+                endFrame: positions[idx[idx.length - 1]].frameIndex,
+                indices: idx,
+                frameCount: idx.length,
+                medianX: m.x,
+                medianY: m.y,
+                radius: this.percentile(dists, this.clusterOptions.radiusPercentile),
+                maxDeviation: Math.max(...dists),
+                drift: this.clusterDrift(idx),
+                outliers,
+                spikes: outliers.filter(o => o.beyondRadius)
+            };
+        }
+
+        detectStationaryClusters(threshold, minLength, tolerance, maxRadius) {
+            if (!this.trajectoryData) return [];
+            const positions = this.trajectoryData.positions;
+            if (positions.length === 0) return [];
+
+            const seeded = this.seedSegments(threshold, tolerance);
+            const merged = this.agglomerateSegments(seeded, threshold, maxRadius, tolerance);
+
+            return merged
+                .map(seg => this.describeCluster(seg, threshold, maxRadius))
+                .filter(c => c.frameCount >= minLength);   // min-length applied AFTER merging
+        }
+
+        // ---------- report ----------
+
+        buildClusterReport(clusters, opts) {
+            const total = this.trajectoryData.positions.length;
+            const affected = clusters.reduce((s, c) => s + c.frameCount, 0);
+            const spikes = clusters.reduce((s, c) => s + c.spikes.length, 0);
+            const beyond = clusters.reduce((s, c) => s + c.outliers.length, 0);
+
+            const summary =
+                `${clusters.length} cluster${clusters.length === 1 ? '' : 's'} detected · ` +
+                `${affected}/${total} frames affected (${(100 * affected / total).toFixed(0)}%) · ` +
+                `${spikes} spike${spikes === 1 ? '' : 's'} absorbed`;
+
+            const rows = clusters.map((c, k) => ({
+                '#': k + 1,
+                frames: `${c.startFrame}-${c.endFrame}`,
+                count: c.frameCount,
+                radius_cm: +c.radius.toFixed(1),
+                maxDev_cm: +c.maxDeviation.toFixed(1),
+                drift_cm: +c.drift.toFixed(1),
+                beyondThreshold: c.outliers.length,
+                spikes: c.spikes.length,
+                medianX: +c.medianX.toFixed(1),
+                medianY: +c.medianY.toFixed(1)
+            }));
+
+            const audit = clusters.flatMap((c, k) => c.outliers.map(o => ({
+                cluster: k + 1,
+                range: `${c.startFrame}-${c.endFrame}`,
+                absorbedFrame: o.frameIndex,
+                distFromMedian_cm: +o.distance.toFixed(1),
+                beyondClusterRadius: o.beyondRadius
+            })));
+
+            return { summary, rows, audit, affected, spikes, beyond, total };
+        }
+
+        // ---------- entry point ----------
+
+        mergeStationaryClusters() {
+            if (!this.trajectoryMode || !this.trajectoryData) {
+                this.showMessage('Load a trajectory first', true);
+                return;
+            }
+            const positions = this.trajectoryData.positions;
+            if (positions.length < 2) {
+                this.showMessage('Not enough points to analyse', true);
+                return;
+            }
+
+            let threshold = parseFloat(document.getElementById('cluster-threshold').value);
+            if (isNaN(threshold) || threshold <= 0) threshold = this.suggestClusterThreshold(true);
+
+            let maxRadius = parseFloat(document.getElementById('cluster-radius').value);
+            if (isNaN(maxRadius) || maxRadius <= 0) maxRadius = this.suggestClusterRadius(true);
+            if (maxRadius < threshold) maxRadius = threshold;   // radius can never be tighter than the seed
+
+            let minLength = parseInt(document.getElementById('cluster-min-length').value);
+            if (isNaN(minLength) || minLength < 2) minLength = 15;
+
+            let tolerance = parseInt(document.getElementById('cluster-tolerance').value);
+            if (isNaN(tolerance) || tolerance < 0) tolerance = 2;
+
+            const overThreshold = this.checkClusterThresholdWarning();
+            const opts = { threshold, maxRadius, minLength, tolerance };
+            const clusters = this.detectStationaryClusters(threshold, minLength, tolerance, maxRadius);
+
+            if (clusters.length === 0) {
+                this.cancelClusterPreview(true);
+                const st = this.computeJitterStats();
+                this.showMessage(
+                    `No stationary clusters (thr ${threshold}cm, radius ${maxRadius}cm, min ${minLength}f). ` +
+                    `Measured jitter ${st.jitter.toFixed(0)}cm — try raising the radius.`, true);
+                return;
+            }
+
+            const report = this.buildClusterReport(clusters, opts);
+
+            console.groupCollapsed(
+                `[Stationary Merge] Cow ${this.trajectoryData.cowId} | frames ` +
+                `${this.trajectoryData.frameStart}-${this.trajectoryData.frameEnd} | ` +
+                `thr=${threshold} radius=${maxRadius} min=${minLength} tol=${tolerance}`);
+            console.log(report.summary);
+            console.table(report.rows);
+            if (report.audit.length) {
+                console.log('Frames absorbed beyond the inlier threshold:');
+                console.table(report.audit);
+            }
+            console.groupEnd();
+
+            this.clusterPreview = { clusters, report, ...opts, overThreshold,
+                                    excludedIndices: new Set() };
+            this.renderClusterPreviewPanel();
+            this.render();
+        }
+
+        renderClusterPreviewPanel() {
+            const panel = document.getElementById('cluster-preview-panel');
+            if (!panel || !this.clusterPreview) return;
+            const { clusters, report, threshold, maxRadius, minLength, tolerance, overThreshold } = this.clusterPreview;
+
+            document.getElementById('cluster-preview-summary').innerHTML =
+                `<strong>${report.summary}</strong><br>` +
+                `<span style="color:#888;">thr ${threshold} cm · radius ${maxRadius} cm · ` +
+                `min ${minLength} f · tol ${tolerance} f</span><br>` +
+                `<span style="color:#FFB74D;">Tip: click a point on the canvas to exclude/include it before applying.</span>`;
+
+            const excluded = this.clusterPreview.excludedIndices || new Set();
+            document.getElementById('cluster-preview-list').innerHTML = clusters.map((c, k) => {
+                const spike = c.spikes.length ? ` <span style="color:#f44336;">${c.spikes.length}✦</span>` : '';
+                const exCount = c.indices.filter(i => excluded.has(i)).length;
+                const exNote = exCount ? ` <span style="color:#888;">${exCount} excluded</span>` : '';
+                const eff = c.frameCount - exCount;
+                return `<div style="padding:3px; border-bottom:1px solid #2d2d2d; cursor:pointer;"
+                             onclick="app.jumpToFrameIndex(${c.startFrame})"
+                             title="median (${c.medianX.toFixed(0)}, ${c.medianY.toFixed(0)}) cm">
+                    <span style="color:#FF9800;">#${k + 1}</span>
+                    ${c.startFrame}–${c.endFrame}
+                    <span style="color:#4CAF50;">${eff}/${c.frameCount}f</span>
+                    r=${c.radius.toFixed(0)} drift=${c.drift.toFixed(0)}
+                    <span style="color:#aaa;">${c.outliers.length} beyond thr</span>${spike}${exNote}
+                </div>`;
+            }).join('');
+
+            const warnEl = document.getElementById('cluster-preview-warning');
+            const notes = [];
+            if (overThreshold) {
+                notes.push(`⚠️ Cluster threshold ${threshold} cm exceeds the jump-detection threshold ` +
+                           `(${this.jumpThreshold} cm) — clusters may absorb what would otherwise be flagged as issues.`);
+            }
+            if (this.trajectoryData.missingFrames.length > 0) {
+                notes.push(`⚠️ ${this.trajectoryData.missingFrames.length} frame(s) still missing — run "Fill Gaps" first; ` +
+                           `clusters are never merged across a temporal gap.`);
+            }
+            warnEl.innerHTML = notes.join('<br>');
+            warnEl.style.display = notes.length ? 'block' : 'none';
+
+            panel.style.display = 'block';
+        }
+
+        applyClusterPreview() {
+            if (!this.clusterPreview) return;
+            this.applyStationaryClusterMerge(this.clusterPreview.clusters);
+        }
+
+        cancelClusterPreview(silent = false) {
+            const panel = document.getElementById('cluster-preview-panel');
+            if (panel) panel.style.display = 'none';
+            const had = !!this.clusterPreview;
+            this.clusterPreview = null;
+            if (had && !silent) { this.render(); this.showMessage('Merge cancelled'); }
+        }
+
+        applyStationaryClusterMerge(clusters) {
+            if (!this.trajectoryData || !clusters || clusters.length === 0) return;
+
+            const cowId = this.trajectoryData.cowId;
+            const positions = this.trajectoryData.positions;
+
+            this.saveHistory();   // ONCE for the whole operation
+
+            let changed = 0;
+            const applied = [];
+            for (const cluster of clusters) {
+                const eff = this.effectiveIndices(cluster);
+                if (eff.length === 0) continue;                 // whole cluster deselected -> skip
+
+                const m = this.medianPointOf(eff);              // target from selected points only
+                const posID = this.worldToPositionID(m.x, m.y);
+                for (const idx of eff) {
+                    const frame = this.frames[positions[idx].frameIndex];
+                    if (frame && frame.jsonData) {
+                        const cow = frame.jsonData.find(c => c.personID === cowId);
+                        if (cow) { cow.positionID = posID; changed++; }   // plain edit, no linkage stored
+                    }
+                }
+                applied.push({
+                    frames: `${cluster.startFrame}-${cluster.endFrame}`,
+                    count: eff.length,
+                    excluded: cluster.frameCount - eff.length,
+                    positionID: posID,
+                    medianX: +m.x.toFixed(1),
+                    medianY: +m.y.toFixed(1)
+                });
+            }
+
+            console.log(`[Stationary Merge] Applied ${clusters.length} cluster(s), ${changed} frame(s) rewritten.`);
+            console.table(applied);
+
+            const panel = document.getElementById('cluster-preview-panel');
+            if (panel) panel.style.display = 'none';
+            this.clusterPreview = null;
+
+            this.loadTrajectory();
+            this.detectTrajectoryIssues();
+            this.updateTrajectoryInfo();
+            this.drawTimeline();
+            this.render();
+            this.autoSave();
+
+            this.showMessage(`Merged ${clusters.length} cluster(s): ${changed} frames set to median position`);
+        }
+
+        // ---------- preview visualisation ----------
+
+        /** Indices of a cluster that are still selected for merging (not user-excluded). */
+        effectiveIndices(cluster) {
+            const ex = this.clusterPreview && this.clusterPreview.excludedIndices;
+            if (!ex || ex.size === 0) return cluster.indices;
+            return cluster.indices.filter(i => !ex.has(i));
+        }
+
+        drawClusterPreview() {
+            if (!this.clusterPreview || !this.trajectoryData) return;
+            const { clusters, threshold, maxRadius } = this.clusterPreview;
+            const excluded = this.clusterPreview.excludedIndices || new Set();
+            const positions = this.trajectoryData.positions;
+
+            const o = this.worldToCanvas(0, 0), u = this.worldToCanvas(100, 0);
+            const pxPerCm = Math.abs(u.canvasX - o.canvasX) / 100;
+            const labelSlots = [];
+
+            clusters.forEach((cluster, k) => {
+                // Recompute the merge target from the points still selected so the
+                // preview reflects exactly what "Apply" will do.
+                const eff = this.effectiveIndices(cluster);
+                const m = eff.length ? this.medianPointOf(eff)
+                                     : { x: cluster.medianX, y: cluster.medianY };
+                const radiusCm = eff.length
+                    ? this.percentile(this.distancesFrom(eff, m), this.clusterOptions.radiusPercentile)
+                    : cluster.radius;
+
+                const center = this.worldToCanvas(m.x, m.y);
+                const rPix = Math.max(10, radiusCm * pxPerCm);
+                const capPix = Math.max(rPix + 2, maxRadius * pxPerCm);
+                const spikeIdx = new Set(cluster.spikes.map(s => s.index));
+                const allExcluded = eff.length === 0;
+
+                // the allowed cap, faint
+                this.ctx.beginPath();
+                this.ctx.arc(center.canvasX, center.canvasY, capPix, 0, Math.PI * 2);
+                this.ctx.setLineDash([2, 6]);
+                this.ctx.strokeStyle = 'rgba(255, 152, 0, 0.25)';
+                this.ctx.lineWidth = 1;
+                this.ctx.stroke();
+                this.ctx.setLineDash([]);
+
+                // the actual measured cluster extent
+                this.ctx.beginPath();
+                this.ctx.arc(center.canvasX, center.canvasY, rPix, 0, Math.PI * 2);
+                this.ctx.fillStyle = allExcluded ? 'rgba(120,120,120,0.10)' : 'rgba(255, 152, 0, 0.12)';
+                this.ctx.fill();
+                this.ctx.setLineDash([5, 4]);
+                this.ctx.strokeStyle = allExcluded ? 'rgba(120,120,120,0.6)' : 'rgba(255, 152, 0, 0.9)';
+                this.ctx.lineWidth = 2;
+                this.ctx.stroke();
+                this.ctx.setLineDash([]);
+
+                for (const idx of cluster.indices) {
+                    const p = positions[idx];
+                    if (!p) continue;
+                    const c = this.worldToCanvas(p.worldX, p.worldY);
+                    const isExcluded = excluded.has(idx);
+
+                    this.ctx.beginPath();
+                    this.ctx.arc(c.canvasX, c.canvasY, 4, 0, Math.PI * 2);
+                    this.ctx.fillStyle = isExcluded ? 'rgba(120,120,120,0.7)'
+                                                    : 'rgba(255, 152, 0, 0.85)';
+                    this.ctx.fill();
+
+                    if (spikeIdx.has(idx)) {              // absorbed beyond the cap
+                        this.ctx.beginPath();
+                        this.ctx.arc(c.canvasX, c.canvasY, 11, 0, Math.PI * 2);
+                        this.ctx.strokeStyle = isExcluded ? '#888' : '#f44336';
+                        this.ctx.lineWidth = 2;
+                        this.ctx.stroke();
+                    }
+
+                    if (isExcluded) {                    // draw an X to show it's dropped
+                        const s = 5;
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(c.canvasX - s, c.canvasY - s);
+                        this.ctx.lineTo(c.canvasX + s, c.canvasY + s);
+                        this.ctx.moveTo(c.canvasX + s, c.canvasY - s);
+                        this.ctx.lineTo(c.canvasX - s, c.canvasY + s);
+                        this.ctx.strokeStyle = '#fff';
+                        this.ctx.lineWidth = 1.5;
+                        this.ctx.stroke();
+                    }
+                }
+
+                // median target (only meaningful if something is still selected)
+                if (!allExcluded) {
+                    this.ctx.beginPath();
+                    this.ctx.arc(center.canvasX, center.canvasY, 6, 0, Math.PI * 2);
+                    this.ctx.fillStyle = '#FF9800';
+                    this.ctx.fill();
+                    this.ctx.strokeStyle = '#fff';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.stroke();
+                }
+
+                // compact, collision-avoiding label
+                const ly = center.canvasY - rPix - 6;
+                const collides = labelSlots.some(s =>
+                    Math.abs(s.x - center.canvasX) < 60 && Math.abs(s.y - ly) < 14);
+                this.ctx.font = 'bold 11px Arial';
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'bottom';
+                if (collides) {
+                    this.ctx.fillStyle = '#FFB74D';
+                    this.ctx.fillText(`#${k + 1}`, center.canvasX, ly);
+                } else {
+                    const txt = `#${k + 1} ${cluster.startFrame}–${cluster.endFrame} (${eff.length}/${cluster.frameCount}f)`;
+                    const w = this.ctx.measureText(txt).width;
+                    this.ctx.fillStyle = 'rgba(0,0,0,0.65)';
+                    this.ctx.fillRect(center.canvasX - w / 2 - 3, ly - 12, w + 6, 14);
+                    this.ctx.fillStyle = '#FFB74D';
+                    this.ctx.fillText(txt, center.canvasX, ly);
+                    labelSlots.push({ x: center.canvasX, y: ly });
+                }
+            });
+        }
+
+        /**
+         * While a cluster-merge preview is showing, a click on any cluster point
+         * toggles whether it participates in the merge. Returns true if a point
+         * was hit (so the caller can stop further mousedown handling).
+         */
+        handleClusterPreviewClick(mouseX, mouseY) {
+            if (!this.clusterPreview || !this.trajectoryData) return false;
+            if (!this.clusterPreview.excludedIndices) this.clusterPreview.excludedIndices = new Set();
+
+            const positions = this.trajectoryData.positions;
+            let hit = null, hitDist = Infinity;
+
+            for (const cluster of this.clusterPreview.clusters) {
+                for (const idx of cluster.indices) {
+                    const p = positions[idx];
+                    if (!p) continue;
+                    const c = this.worldToCanvas(p.worldX, p.worldY);
+                    const d = Math.hypot(mouseX - c.canvasX, mouseY - c.canvasY);
+                    if (d < 12 && d < hitDist) { hit = idx; hitDist = d; }
+                }
+            }
+
+            if (hit === null) return false;
+
+            if (this.clusterPreview.excludedIndices.has(hit)) {
+                this.clusterPreview.excludedIndices.delete(hit);
+            } else {
+                this.clusterPreview.excludedIndices.add(hit);
+            }
+
+            this.renderClusterPreviewPanel();
+            this.render();
+            return true;
         }
 
         jumpToNextGap() {
