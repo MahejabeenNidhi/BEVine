@@ -11,6 +11,8 @@ from torch.utils.data import DataLoader
 from datasets.multiviewx_dataset import MultiviewX
 from datasets.wildtrack_dataset import Wildtrack
 from datasets.mmcows_dataset import MmCows
+from datasets.mmcows3d_dataset import MmCows3D
+from datasets.multiviewc_dataset import MultiviewC
 from datasets.jerccows_dataset import JerCCows
 from datasets.pedestrian_dataset import PedestrianDataset
 from datasets.multiseq_pedestrian_dataset import MultiSeqPedestrianDataset
@@ -26,9 +28,20 @@ class PedestrianDataModule(pl.LightningDataModule):
         resolution=None,
         bounds=None,
         accumulate_grad_batches=8,
-        # ── multi-sequence knobs ──────────────────────────────
+        # multi-sequence knobs
         multi_seq: bool = False,
         manifest_name: str = 'sequences_mmCows_all.json',
+        center_from_3d: bool = True,
+        # '3d' | '2d' | '2d_strict'  — see MmCows3D.
+        # Switches 3D supervision off WITHOUT deleting 3D_annotations/.
+        annotation_mode: str = '3d',
+        require_gt_parity: bool = False,
+        # stationary-frame filtering (train split only)
+        drop_stationary: bool = False,
+        stationary_min_disp_cm: float = 5.0,
+        stationary_keep_prob: float = 0.0,
+        stationary_max_run: int = 5,
+        track_offset_guard_cells: float = 15.0,
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -39,6 +52,14 @@ class PedestrianDataModule(pl.LightningDataModule):
         self.accumulate_grad_batches = accumulate_grad_batches
         self.multi_seq = multi_seq
         self.manifest_name = manifest_name
+        self.center_from_3d = center_from_3d
+        self.annotation_mode = str(annotation_mode).lower()
+        self.require_gt_parity = bool(require_gt_parity)
+        self.drop_stationary = bool(drop_stationary)
+        self.stationary_min_disp_cm = float(stationary_min_disp_cm)
+        self.stationary_keep_prob = float(stationary_keep_prob)
+        self.stationary_max_run = int(stationary_max_run)
+        self.track_offset_guard_cells = float(track_offset_guard_cells)
 
         self.dataset = os.path.basename(self.data_dir)
 
@@ -51,7 +72,7 @@ class PedestrianDataModule(pl.LightningDataModule):
     # helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _create_base(data_dir: str):
+    def _create_base(data_dir: str, annotation_mode: str = '3d'):
         """Instantiate the right base dataset class for *data_dir*."""
         name = os.path.basename(data_dir).lower()
         if 'wildtrack' in name:
@@ -59,25 +80,26 @@ class PedestrianDataModule(pl.LightningDataModule):
         elif 'multiviewx' in name:
             return MultiviewX(data_dir)
         elif 'mmcows' in name:
-            return MmCows(data_dir)
+            return MmCows3D(data_dir, annotation_mode=annotation_mode)
+        elif 'multiviewc' in name:  # 'multiviewc_data' contains neither
+            return MultiviewC(data_dir)  # 'multiviewx' nor 'mmcows' — safe
         elif 'jerccows' in name:
             return JerCCows(data_dir)
         else:
             raise ValueError(f'Unknown dataset name {name}')
 
     def _create_base_for_seq(self, seq_dir: str):
-        """Instantiate the right base dataset class for a sequence
-        subdirectory, inferring the dataset type from self.data_dir
-        (the multi-sequence root) rather than from the subdirectory
-        name, because sequence folder names like 'feeding_1_train'
-        contain no dataset identifier."""
+        """Infer the dataset type from the multi-sequence ROOT, because
+        sequence folder names carry no dataset identifier."""
         parent_name = os.path.basename(self.data_dir).lower()
         if 'wildtrack' in parent_name:
             return Wildtrack(seq_dir)
         elif 'multiviewx' in parent_name:
             return MultiviewX(seq_dir)
         elif 'mmcows' in parent_name:
-            return MmCows(seq_dir)
+            return MmCows3D(seq_dir, annotation_mode=self.annotation_mode)
+        elif 'multiviewc' in parent_name:
+            return MultiviewC(seq_dir)
         elif 'jerccows' in parent_name:
             return JerCCows(seq_dir)
         else:
@@ -123,6 +145,21 @@ class PedestrianDataModule(pl.LightningDataModule):
                 continue
 
             base = self._create_base_for_seq(seq_dir)
+            if not getattr(base, 'has_gt', True):
+                if split not in ('test', 'predict'):
+                    raise ValueError(
+                        f"Sequence '{seq_name}' (split '{split}') has NO "
+                        f"ground-truth annotations (no usable "
+                        f"annotations_positions/). Unannotated sequences "
+                        f"are supported for TEST/PREDICT only: training on "
+                        f"them would supervise an EMPTY heat-map (teaching "
+                        f"the detector to predict nothing), and validation "
+                        f"metrics would be undefined. Move '{seq_name}' to "
+                        f"the manifest's 'test' list."
+                    )
+                print(f"  Seq {seq_offset + seq_idx}: {seq_name} has NO "
+                      f"annotations -> inference-only (excluded from every "
+                      f"metric; predictions go to *_unlabeled.txt)")
             ds = PedestrianDataset(
                 base,
                 is_train=is_train,
@@ -130,6 +167,12 @@ class PedestrianDataModule(pl.LightningDataModule):
                 bounds=self.bounds,
                 use_all_frames=True,
                 sequence_num=seq_offset + seq_idx,
+                center_from_3d=self.center_from_3d,
+                drop_stationary=self.drop_stationary,
+                stationary_min_disp_cm=self.stationary_min_disp_cm,
+                stationary_keep_prob=self.stationary_keep_prob,
+                stationary_max_run=self.stationary_max_run,
+                track_offset_guard_cells=self.track_offset_guard_cells,
             )
             print(
                 f"  Seq {seq_offset + seq_idx}: {seq_name} "
@@ -137,10 +180,36 @@ class PedestrianDataModule(pl.LightningDataModule):
             )
             datasets.append(ds)
 
+        # stationary-filter summary + audit file
+        reports = [getattr(ds, 'stationary_report', None) for ds in datasets]
+        reports = [r for r in reports if r]
+        if reports:
+            tot_f = sum(r['frames_in_split'] for r in reports)
+            tot_s = sum(r['stationary'] for r in reports)
+            tot_d = sum(r['dropped'] for r in reports)
+            print(f"  [STATIONARY] split '{split}': {tot_s}/{tot_f} frames "
+                  f"fully stationary; dropped {tot_d} "
+                  f"({100.0 * tot_d / max(tot_f, 1):.1f}% of split)")
+            try:
+                out_path = os.path.join(self.data_dir,
+                                        f'stationary_report_{split}.json')
+                with open(out_path, 'w') as f:
+                    json.dump(reports, f, indent=1)
+                print(f"  [STATIONARY] per-sequence report -> {out_path}")
+            except OSError as e:
+                print(f"  [STATIONARY] ⚠ could not write report ({e})")
+
         if not datasets:
             raise ValueError(
                 f"No valid sequences for split '{split}'"
             )
+
+        n_unl = sum(1 for d in datasets
+                    if not getattr(d.base, 'has_gt', True))
+        if n_unl:
+            print(f"  Split '{split}': {n_unl}/{len(datasets)} sequence(s) "
+                  f"are inference-only (no GT); the remaining "
+                  f"{len(datasets) - n_unl} are evaluated normally.")
 
         return MultiSeqPedestrianDataset(datasets)
 
@@ -242,28 +311,48 @@ class PedestrianDataModule(pl.LightningDataModule):
                 )
 
         else:
-            # ── single-sequence mode (backward compatible) ───────
+            # single-sequence mode (backward compatible)
             base = self._create_base(self.data_dir)
 
             if stage == 'fit':
                 self.data_train = PedestrianDataset(
                     base, is_train=True,
-                    resolution=self.resolution, bounds=self.bounds,
+                    resolution=self.resolution, bounds=self.bounds, center_from_3d=self.center_from_3d,
+                    drop_stationary=self.drop_stationary,
+                    stationary_min_disp_cm=self.stationary_min_disp_cm,
+                    stationary_keep_prob=self.stationary_keep_prob,
+                    stationary_max_run=self.stationary_max_run,
+                    track_offset_guard_cells=self.track_offset_guard_cells,
                 )
             if stage in ('fit', 'validate'):
                 self.data_val = PedestrianDataset(
                     base, is_train=False,
-                    resolution=self.resolution, bounds=self.bounds,
+                    resolution=self.resolution, bounds=self.bounds, center_from_3d=self.center_from_3d,
+                    drop_stationary=self.drop_stationary,
+                    stationary_min_disp_cm=self.stationary_min_disp_cm,
+                    stationary_keep_prob=self.stationary_keep_prob,
+                    stationary_max_run=self.stationary_max_run,
+                    track_offset_guard_cells=self.track_offset_guard_cells,
                 )
             if stage == 'test':
                 self.data_test = PedestrianDataset(
                     base, is_train=False,
-                    resolution=self.resolution, bounds=self.bounds,
+                    resolution=self.resolution, bounds=self.bounds, center_from_3d=self.center_from_3d,
+                    drop_stationary=self.drop_stationary,
+                    stationary_min_disp_cm=self.stationary_min_disp_cm,
+                    stationary_keep_prob=self.stationary_keep_prob,
+                    stationary_max_run=self.stationary_max_run,
+                    track_offset_guard_cells=self.track_offset_guard_cells,
                 )
             if stage == 'predict':
                 self.data_predict = PedestrianDataset(
                     base, is_train=False,
-                    resolution=self.resolution, bounds=self.bounds,
+                    resolution=self.resolution, bounds=self.bounds, center_from_3d=self.center_from_3d,
+                    drop_stationary=self.drop_stationary,
+                    stationary_min_disp_cm=self.stationary_min_disp_cm,
+                    stationary_keep_prob=self.stationary_keep_prob,
+                    stationary_max_run=self.stationary_max_run,
+                    track_offset_guard_cells=self.track_offset_guard_cells,
                 )
 
     # ------------------------------------------------------------------
