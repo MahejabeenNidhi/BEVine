@@ -6,7 +6,7 @@ import math as _math
 from collections import defaultdict
 
 from utils import basic
-
+from utils.obb import make_box_corners as _make_box_corners
 
 class SimpleLoss(torch.nn.Module):
     def __init__(self, pos_weight):
@@ -21,7 +21,6 @@ class SimpleLoss(torch.nn.Module):
 
 class FocalLoss(torch.nn.Module):
     '''nn.Module warpper for focal loss'''
-
     def __init__(self, use_distance_weight=False):
         super(FocalLoss, self).__init__()
         self.use_distance_weight = use_distance_weight
@@ -33,7 +32,15 @@ class FocalLoss(torch.nn.Module):
                 pred (batch x c x h x w)
                 gt_regr (batch x c x h x w)
         """
-        # find pos indices and neg indices
+        # Belt-and-suspenders: this loss takes log(pred) / log(1-pred),
+        # which is only safe if `pred` is bounded away from {0,1} at
+        # THIS tensor's actual precision. `basic.sigmoid()` already
+        # guarantees that in fp32; casting here too means this loss
+        # stays correct even if it is ever called on an un-clamped or
+        # bf16 `pred` from somewhere else.
+        pred = pred.float()
+        gt = gt.float()
+
         pos_inds = gt.eq(1).float()
         neg_inds = gt.lt(1).float()
 
@@ -399,7 +406,7 @@ def reprojection_loss(
             cam_n_matches[c] += n_matches
             cam_residual_sum[c] += res_px * n_matches
 
-    # ── Aggregation: choose weighting strategy ────────────
+    # Aggregation: choose weighting strategy
     if camera_weighting == 'equal':
         # I1: equal weight per camera
         cam_means = []
@@ -435,3 +442,157 @@ def reprojection_loss(
         return loss, stats
 
     return loss
+
+# ──────────────────────────────────────────────────────────────────
+# 3D-box corner reprojection loss
+# ──────────────────────────────────────────────────────────────────
+
+def _giou_loss_2d(pred, gt):
+    """1 - GIoU between two axis-aligned boxes (xmin,ymin,xmax,ymax)."""
+    x1 = torch.max(pred[0], gt[0]); y1 = torch.max(pred[1], gt[1])
+    x2 = torch.min(pred[2], gt[2]); y2 = torch.min(pred[3], gt[3])
+    inter = (x2 - x1).clamp(min=0) * (y2 - y1).clamp(min=0)
+    area_p = (pred[2] - pred[0]).clamp(min=0) * (pred[3] - pred[1]).clamp(min=0)
+    area_g = (gt[2] - gt[0]).clamp(min=0) * (gt[3] - gt[1]).clamp(min=0)
+    union = area_p + area_g - inter + 1e-7
+    iou = inter / union
+    xc1 = torch.min(pred[0], gt[0]); yc1 = torch.min(pred[1], gt[1])
+    xc2 = torch.max(pred[2], gt[2]); yc2 = torch.max(pred[3], gt[3])
+    area_c = (xc2 - xc1) * (yc2 - yc1) + 1e-7
+    giou = iou - (area_c - union) / area_c
+    return 1.0 - giou
+
+
+def reprojection_loss_3d(
+    grid_gt_3d,             # (B, M, >=6): mem_x, mem_y, world_x_cm, world_y_cm, z_base, cow_id
+    img_gt_2d,              # (B, S, max_obj, 5): xmin, ymin, xmax, ymax, pid
+    intrinsic_original,     # (B, S, 4, 4)
+    refined_extrinsics,     # (B, S, 4, 4)  -- DETACH upstream unless you
+                            #                  really want calibration to move
+    yaw_pred_objs,          # list[B] of (N_b, 2) raw (sin 2t, cos 2t) per
+                            # SUPERVISED GT row of batch b (see below)
+    size_pred_objs,         # list[B] of (N_b, 3) METRES, same alignment
+    mem_shape,              # (Y, X) of the BEV grid the mem coords live in
+    loss_type='smooth_l1',  # 'smooth_l1' | 'giou'
+    size_scale=100.0,       # metres -> cm
+    normalize=True,         # divide the pixel residual by the GT bbox scale
+    min_visible_corners=4,
+    min_size_cm=10.0,
+):
+    """
+    Returns (loss, n_terms).
+
+    ALIGNMENT CONTRACT: "supervised GT rows" of batch b are the rows of
+    ``grid_gt_3d[b]`` with ``cow_id > 0`` AND in-bounds mem coords, in row
+    order. This is exactly the mask ``WorldTrackModel._query_gt_attrs``
+    uses to build ``per_batch``, so ``yaw_pred_objs[b][m]`` describes
+    ``boxes[m]`` below. The mask is recomputed here (from the same rules)
+    rather than trusted, keeping this function self-contained.
+
+    ``mem_x/mem_y`` are no longer used to SAMPLE anything (predictions
+    are per-object already); they only take part in the bounds filter.
+    """
+    B = grid_gt_3d.shape[0]
+    S = img_gt_2d.shape[1]
+    device = grid_gt_3d.device
+    Y, X = int(mem_shape[0]), int(mem_shape[1])
+
+    per_box_losses = []
+
+    for b in range(B):
+        rows = grid_gt_3d[b]
+        inb = ((rows[:, 0] >= 0) & (rows[:, 0] < float(X))
+               & (rows[:, 1] >= 0) & (rows[:, 1] < float(Y)))
+        valid = (rows[:, 5] > 0) & inb
+        if not valid.any():
+            continue
+        boxes = rows[valid]
+        yaw_b = yaw_pred_objs[b]        # (N_b, 2), aligned with boxes
+        size_b = size_pred_objs[b]      # (N_b, 3) metres, aligned
+
+        # Per-camera GT lookup, computed ONCE per batch element instead of
+        # once per (box, camera): fewer kernel launches, fewer allocator
+        # round-trips, identical matches (first visible row per pid wins,
+        # exactly like the old `match[0]`).
+        cam_gt = []                     # list over c: dict pid -> (4,) box
+        for c in range(S):
+            ig = img_gt_2d[b, c]
+            bbox_vis = ~(
+                (ig[:, 0] == -1) & (ig[:, 1] == -1) &
+                (ig[:, 2] == -1) & (ig[:, 3] == -1)
+            )
+            vis_rows = bbox_vis.nonzero(as_tuple=True)[0].tolist()
+            pids = ig[:, 4].long()
+            lut = {}
+            for r in vis_rows:          # ascending row order preserved
+                pid = int(pids[r])
+                if pid not in lut:
+                    lut[pid] = ig[r, :4]
+            cam_gt.append(lut)
+
+        for m in range(boxes.shape[0]):
+            world_x = boxes[m, 2]
+            world_y = boxes[m, 3]
+            z_base = boxes[m, 4]
+            cow_id = int(boxes[m, 5].item())
+
+            s_raw, c_raw = yaw_b[m, 0], yaw_b[m, 1]
+            n = torch.sqrt(s_raw * s_raw + c_raw * c_raw + 1e-6)
+            # Head emits (sin 2t, cos 2t); after L2-normalisation atan2's
+            # gradient is bounded.
+            theta = 0.5 * torch.atan2(s_raw / n, c_raw / n)
+            sin_y = torch.sin(theta)
+            cos_y = torch.cos(theta)
+
+            l = (size_b[m, 0] * size_scale).clamp(min=min_size_cm)
+            w = (size_b[m, 1] * size_scale).clamp(min=min_size_cm)
+            h = (size_b[m, 2] * size_scale).clamp(min=min_size_cm)
+
+            corners = _make_box_corners(
+                world_x, world_y, z_base, l, w, h, sin_y, cos_y, device
+            )                                              # (8, 3)
+            ones = torch.ones(8, 1, device=device, dtype=corners.dtype)
+            corners_h = torch.cat([corners, ones], dim=1)  # (8, 4)
+
+            for c in range(S):
+                gt_box = cam_gt[c].get(cow_id)
+                if gt_box is None:
+                    continue
+
+                E = refined_extrinsics[b, c]
+                K = intrinsic_original[b, c]
+
+                cam_pts = E[:3, :] @ corners_h.T           # (3, 8)
+                cam_z = cam_pts[2, :]
+                in_front = cam_z > 0
+                if int(in_front.sum().item()) < min_visible_corners:
+                    continue
+
+                cz = cam_z.clamp(min=1e-4)
+                u = K[0, 0] * cam_pts[0, :] / cz + K[0, 2]
+                v = K[1, 1] * cam_pts[1, :] / cz + K[1, 2]
+                u = u[in_front]
+                v = v[in_front]
+
+                pred_box = torch.stack([u.min(), v.min(), u.max(), v.max()])
+
+                if loss_type == 'giou':
+                    per_box_losses.append(_giou_loss_2d(pred_box, gt_box))
+                else:
+                    if normalize:
+                        scale = torch.clamp(
+                            torch.max(gt_box[2] - gt_box[0],
+                                      gt_box[3] - gt_box[1]).detach(),
+                            min=8.0,
+                        )
+                    else:
+                        scale = torch.ones((), device=device)
+                    per_box_losses.append(
+                        F.smooth_l1_loss(pred_box / scale,
+                                         gt_box / scale,
+                                         reduction='mean')
+                    )
+
+    if per_box_losses:
+        return torch.stack(per_box_losses).mean(), len(per_box_losses)
+    return torch.zeros((), device=device, requires_grad=True), 0

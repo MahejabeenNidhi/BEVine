@@ -6,7 +6,8 @@ import utils.vox
 import utils.basic
 from utils.precision import fp32_inverse
 from models.encoder import (Encoder_res101, Encoder_res50, Encoder_eff,
-                             Encoder_swin_t, Encoder_res18)
+                             Encoder_swin_t, Encoder_res18,
+                             Encoder_swin_t_lightly)
 from models.decoder import Decoder
 from models.ops.ms_deform_attn import MSDeformAttn, MSDeformAttn3D
 
@@ -144,11 +145,26 @@ class Bevformernet(nn.Module):
                  num_classes=None,
                  z_sign=1,
                  encoder_type='swin_t',
-                 use_image_aux=False):
+                 use_image_aux=False,
+                 bev3d_grad_scale=1.0,  # vestigial, see Decoder
+                 swin_pretrained_path=None,
+                 swin_freeze_backbone=False,
+                 # Gradient checkpointing of the image backbone (activation
+                 # memory <-> step time; numerics identical).
+                 img_grad_checkpoint=False,
+                 # ── per-object 3D attribute head ──
+                 attr3d_neck_dim=128,
+                 attr3d_head_dim=128,
+                 attr3d_points=8,
+                 attr3d_max_offset_cells=20.0,
+                 attr3d_detach_trunk=True):
         super(Bevformernet, self).__init__()
         assert encoder_type in [
             'res101', 'res50', 'res18', 'effb0', 'effb4', 'swin_t'
         ]
+        # empty/None -> baseline torchvision Swin-T (unchanged default)
+        self.swin_pretrained_path = swin_pretrained_path or None
+        self.swin_freeze_backbone = swin_freeze_backbone
         self.Y, self.Z, self.X = Y, Z, X
         self.rand_flip = rand_flip
         self.latent_dim = latent_dim
@@ -176,7 +192,21 @@ class Bevformernet(nn.Module):
         elif encoder_type == 'effb0':
             self.encoder = Encoder_eff(feat2d_dim, version='b0')
         elif encoder_type == 'swin_t':
-            self.encoder = Encoder_swin_t(feat2d_dim)
+            if self.swin_pretrained_path:
+                self.encoder = Encoder_swin_t_lightly(
+                    feat2d_dim,
+                    pretrained_path=self.swin_pretrained_path,
+                    freeze_backbone=self.swin_freeze_backbone,
+                    grad_checkpoint=img_grad_checkpoint,
+                )
+                print(f"[Backbone] Swin-T: CUSTOM pretrained checkpoint "
+                      f"-> {self.swin_pretrained_path} "
+                      f"(freeze_backbone={self.swin_freeze_backbone})")
+            else:
+                self.encoder = Encoder_swin_t(
+                    feat2d_dim, grad_checkpoint=img_grad_checkpoint)
+                print("[Backbone] Swin-T: BASELINE torchvision backbone "
+                      "(ImageNet weights)")
         else:
             self.encoder = Encoder_eff(feat2d_dim, version='b4')
 
@@ -229,6 +259,12 @@ class Bevformernet(nn.Module):
             n_classes=num_classes,
             feat2d=feat2d_dim,
             use_image_aux=use_image_aux,
+            bev3d_grad_scale=bev3d_grad_scale,  # ignored
+            attr3d_neck_dim=attr3d_neck_dim,
+            attr3d_head_dim=attr3d_head_dim,
+            attr3d_points=attr3d_points,
+            attr3d_max_offset_cells=attr3d_max_offset_cells,
+            attr3d_detach_trunk=attr3d_detach_trunk,
         )
 
         # Weights
@@ -239,6 +275,16 @@ class Bevformernet(nn.Module):
             torch.tensor(0.0), requires_grad=True
         )
         self.tracking_weight = nn.Parameter(
+            torch.tensor(0.0), requires_grad=True
+        )
+        # 3D uncertainty weights
+        self.yaw_weight = nn.Parameter(
+            torch.tensor(0.0), requires_grad=True
+        )
+        self.size_weight = nn.Parameter(
+            torch.tensor(0.0), requires_grad=True
+        )
+        self.posture_weight = nn.Parameter(
             torch.tensor(0.0), requires_grad=True
         )
 
