@@ -1,43 +1,65 @@
+import os
 import numpy as np
 # from CLEAR_MOD_HUN import CLEAR_MOD_HUN
 from evaluation.CLEAR_MOD_HUN import CLEAR_MOD_HUN
 
+def _load_mod_file(path, required, label):
+    """Load a whitespace-delimited MOD file as a guaranteed 2-D array."""
+    if not os.path.exists(path):
+        if required:
+            raise FileNotFoundError(
+                f"Required {label} MOD file does not exist: {path}"
+            )
+        return np.empty((0, 3), dtype=float)
 
-def modMetricsCalculator(res_fpath, gt_fpath):
-    """
-    This is simply the python translation of a MATLAB　Evaluation tool
-    used to evaluate detection result created by P. Dollar.
+    if os.path.getsize(path) == 0:
+        if required:
+            raise ValueError(
+                f"Required {label} MOD file is empty: {path}"
+            )
+        return np.empty((0, 3), dtype=float)
 
-    This API allow the project to run purely in Python without using MATLAB Engine.
+    arr = np.loadtxt(path, ndmin=2)
 
-    Some critical information to notice before you use this API:
-    1. This API is only tested and deployed in this project: MVDet https://github.com/hou-yz/MVDet,
-    might not be compatible with other projects.
-    2. The detection result using this API is a little lower (approximately 0~2% decrease in MODA, MODP)
-    than that using MATLAB evaluation tool, the reason might be that the Hungarian Algorithm implemented in
-    sklearn.utils.linear_assignment_.linear_assignment is a little different with the one implemented by
-    P. Dollar, hence leading to different results. Therefore, please use the official MATLAB API if you
-    want to obtain the same result shown in the paper. This Python API is only used for convenience.
-    3. The training process would not be affected by this API.
+    if arr.size == 0:
+        if required:
+            raise ValueError(
+                f"Required {label} MOD file contains no rows: {path}"
+            )
+        return np.empty((0, 3), dtype=float)
 
-    @param res_fpath: detection result file path
-    @param gt_fpath: ground truth result file path
+    if arr.shape[1] < 3:
+        raise ValueError(
+            f"{label.capitalize()} MOD file has {arr.shape[1]} column(s), "
+            f"but at least 3 are required: {path}"
+        )
 
-    @return: recall, precision, MODA, MODP
-    """
+    return arr
 
-    gtRaw = np.loadtxt(gt_fpath)
-    detRaw = np.loadtxt(res_fpath)
-    frames = np.unique(detRaw[:, 0]) if detRaw.size else np.zeros(0)
+def modMetricsCalculator(res_fpath, gt_fpath, td_cells=10.0):
+    # td_cells: association gate in GRID CELLS.
+    # 10.0 cells = 100 cm on the 10 cm mmCows grid (matches MOTA's 100 cm).
+
+    gtRaw = _load_mod_file(
+        gt_fpath, required=True, label='ground-truth'
+    )
+    detRaw = _load_mod_file(
+        res_fpath, required=False, label='prediction'
+    )
+
+    if detRaw.shape[0] == 0:
+        print(f"[MOD] No predictions in {res_fpath}; "
+              "returning zero detection metrics.")
+        MODP, MODA, recall, precision = 0, 0, 0, 0
+        return MODP, MODA, recall, precision
+
+    frames = np.unique(detRaw[:, 0])
     frame_ctr = 0
     gt_flag = True
     det_flag = True
 
     gtAllMatrix = 0
     detAllMatrix = 0
-    if detRaw is None or detRaw.shape[0] == 0:
-        MODP, MODA, recall, precision = 0, 0, 0, 0
-        return MODP, MODA, recall, precision
 
     for t in frames:
         idxs = np.where(gtRaw[:, 0] == t)
@@ -69,5 +91,6 @@ def modMetricsCalculator(res_fpath, gt_fpath):
         else:
             detAllMatrix = np.concatenate((detAllMatrix, tmp_arr), axis=0)
         frame_ctr += 1
-    recall, precision, MODA, MODP = CLEAR_MOD_HUN(gtAllMatrix, detAllMatrix)
+    recall, precision, MODA, MODP = CLEAR_MOD_HUN(
+        gtAllMatrix, detAllMatrix, td=td_cells)
     return recall, precision, MODA, MODP

@@ -7,7 +7,7 @@ def getDistance(x1, y1, x2, y2):
     return math.sqrt(pow((x1 - x2), 2) + pow((y1 - y2), 2))
 
 
-def CLEAR_MOD_HUN(gt, det):
+def CLEAR_MOD_HUN(gt, det, td=10.0):
     """
     @param gt: the ground truth result matrix
     @param det: the detection result matrix
@@ -25,9 +25,9 @@ def CLEAR_MOD_HUN(gt, det):
     [2]   precision	- precision = percentage of correctly detected targets
     [3]	MODA          - N-MODA
     [4]	MODP          - N-MODP
+    td : association gate in GRID CELLS. The caller is responsible for
+         converting centimetres to cells for the dataset at hand.
     """
-    # td = 50 / 2.5  # distance threshold used in WILDTRACK where each grid cell is 2.5cm. 
-    td = 10 # 100cm threshold / 10cm per grid cell = 10 grid cells
 
     F = int(max(gt[:, 0])) + 1
     N = int(max(det[:, 1])) + 1
@@ -71,7 +71,9 @@ def CLEAR_MOD_HUN(gt, det):
             tmpai[tmpai > td] = 1e6
             if not tmpai.all() == 1e6:
                 HUN_res = np.array(linear_sum_assignment(tmpai)).T
-                HUN_res = HUN_res[tmpai[HUN_res[:, 0], HUN_res[:, 1]] < td]
+                # Match motmetrics' inclusive gate: a centre exactly td
+                # cells away (10 cells = 100 cm on mmCows) is matchable.
+                HUN_res = HUN_res[tmpai[HUN_res[:, 0], HUN_res[:, 1]] <= td]
                 u, v = HUN_res[HUN_res[:, 1].argsort()].T
                 for mmm in range(1, len(u) + 1):
                     M[t - 1, u[mmm - 1]] = v[mmm - 1] + 1
@@ -91,8 +93,9 @@ def CLEAR_MOD_HUN(gt, det):
         fp[0][t - 1] = Nt - c[0][t - 1]
         m[0][t - 1] = g[0][t - 1] - c[0][t - 1]
 
-    MODP = sum(1 - distances[distances < td] / td) / np.sum(c) * 100 if sum(
-        1 - distances[distances < td] / td) / np.sum(c) * 100 > 0 else 0
+    within_gate = distances <= td
+    MODP = sum(1 - distances[within_gate] / td) / np.sum(c) * 100 if sum(
+        1 - distances[within_gate] / td) / np.sum(c) * 100 > 0 else 0
     MODA = (1 - ((np.sum(m) + np.sum(fp)) / np.sum(g))) * 100 if (1 - (
             (np.sum(m) + np.sum(fp)) / np.sum(g))) * 100 > 0 else 0
     recall = np.sum(c) / np.sum(g) * 100 if np.sum(c) / np.sum(g) * 100 > 0 else 0
